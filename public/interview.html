@@ -1,0 +1,101 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <meta name="description" content="Live interview session — Interview AI Platform">
+    <title>Interview — Live Session</title>
+    <link rel="stylesheet" href="/css/style.css">
+</head>
+<body>
+    <div style="max-width: 850px; margin: 0 auto; padding: var(--space-xl) var(--space-lg); min-height: 100vh; position: relative; z-index: 1;">
+
+        <!-- ─── HEADER ───────────────────────────────── -->
+        <div class="interview-header" id="interviewHeader">
+            <div>
+                <h2 style="font-size: 1.2rem;" id="headerTitle">Interview Session</h2>
+                <p style="font-size: 0.8rem; color: var(--text-muted);" id="headerRole">Loading...</p>
+            </div>
+            <div style="display: flex; align-items: center; gap: var(--space-lg);">
+                <div class="timer" id="timer">
+                    <div class="timer-dot"></div>
+                    <span id="timerText">00:00</span>
+                </div>
+                <div class="interview-progress">
+                    <div class="progress-bar">
+                        <div class="progress-fill" id="progressFill" style="width: 0%"></div>
+                    </div>
+                    <span class="progress-text" id="progressText">0/0</span>
+                </div>
+            </div>
+        </div>
+
+        <!-- ─── LOADING STATE ────────────────────────── -->
+        <div id="loadingState" class="text-center" style="padding: var(--space-3xl) 0;">
+            <div class="loading-spinner">
+                <div class="spinner"></div>
+                <span>Preparing your interview...</span>
+            </div>
+        </div>
+
+        <!-- ─── QUESTION AREA ────────────────────────── -->
+        <div id="questionArea" class="hidden">
+            <div class="question-card" id="questionCard">
+                <div class="question-badge" id="questionBadge">
+                    <span>Question 1</span>
+                </div>
+                <p class="question-text" id="questionText"></p>
+            </div>
+
+            <!-- AI thinking indicator -->
+            <div id="aiThinking" class="hidden" style="margin-bottom: var(--space-lg);">
+                <div class="loading-spinner">
+                    <div class="spinner"></div>
+                    <span id="aiThinkingText">Interviewer is thinking...</span>
+                </div>
+            </div>
+
+            <!-- Answer input -->
+            <div class="answer-section" id="answerSection">
+                <div class="form-group">
+                    <label class="form-label">Your Answer</label>
+                    <textarea id="answerInput" class="form-textarea" placeholder="Type your answer here..." rows="5"></textarea>
+                </div>
+                <div class="answer-actions">
+                    <div class="timer" style="margin-right: auto;">
+                        <span style="font-size: 0.8rem; color: var(--text-muted);" id="answerTimer">Thinking time: 0s</span>
+                    </div>
+                    <button id="submitBtn" class="btn btn-primary" disabled>
+                        Submit Answer →
+                    </button>
+                </div>
+            </div>
+        </div>
+
+        <!-- ─── COMPLETION STATE ─────────────────────── -->
+        <div id="completionArea" class="hidden">
+            <div class="text-center slide-in">
+                <div style="font-size: 3rem; margin-bottom: var(--space-md);">✅</div>
+                <h2>Interview Complete!</h2>
+                <p class="subtitle mt-md" id="completionMessage">Great job. Here's your session summary.</p>
+            </div>
+
+            <!-- Summary stats -->
+            <div class="summary-grid mt-xl" id="summaryStats"></div>
+
+            <!-- Transcript -->
+            <div class="mt-xl">
+                <h3 style="margin-bottom: var(--space-lg);">📝 Full Transcript</h3>
+                <div id="transcriptList"></div>
+            </div>
+
+            <div class="text-center mt-xl">
+                <a href="/" class="btn btn-secondary btn-lg">← Start New Interview</a>
+            </div>
+        </div>
+
+    </div>
+
+    <script src="/js/interview.js"></script>
+</body>
+</html>
