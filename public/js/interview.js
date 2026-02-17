@@ -1,259 +1,799 @@
 // ============================================================
-// interview.js — Interview Session Logic (Interview AI v1)
+// interview.js — Frontend Interview Logic (v2)
+// ============================================================
+// Handles spoken, MCQ, and coding flows + speech + paste detect
 // ============================================================
 
-(function () {
-    'use strict';
+const API = 'http://localhost:3000/api';
 
-    // ─── SESSION DATA ───────────────────────────────────────
-    const sessionData = JSON.parse(sessionStorage.getItem('interviewSession') || 'null');
+// ─── STATE ──────────────────────────────────────────────────
+let sessionId = null;
+let timerInterval = null;
+let answerTimerInterval = null;
+let mcqTimerInterval = null;
+let codingTimerInterval = null;
+let answerStartTime = null;
+let mcqStartTime = null;
+let codingStartTime = null;
+let selectedMCQOption = null;
 
-    if (!sessionData) {
+// Speech
+let speechEnabled = true;
+let micEnabled = false;
+let synth = window.speechSynthesis;
+let recognition = null;
+
+// Coding behavior tracking
+let pasteCount = 0;
+let firstKeystrokeTime = null;
+let codingStartTimestamp = null;
+let interruptTriggered = false;
+
+// ─── BOOT ───────────────────────────────────────────────────
+document.addEventListener('DOMContentLoaded', () => {
+    const params = new URLSearchParams(window.location.search);
+    sessionId = params.get('session');
+
+    if (!sessionId) {
         window.location.href = '/';
         return;
     }
 
-    const { sessionId, role, candidateName, firstQuestion } = sessionData;
+    // Setup header
+    const name = params.get('name') || 'Candidate';
+    const role = params.get('role') || 'Developer';
+    document.getElementById('headerTitle').textContent = `${name}'s Interview`;
+    document.getElementById('headerRole').textContent = role;
 
-    // ─── DOM ELEMENTS ───────────────────────────────────────
-    const headerTitle = document.getElementById('headerTitle');
-    const headerRole = document.getElementById('headerRole');
-    const timerText = document.getElementById('timerText');
-    const progressFill = document.getElementById('progressFill');
-    const progressText = document.getElementById('progressText');
-    const loadingState = document.getElementById('loadingState');
-    const questionArea = document.getElementById('questionArea');
-    const questionBadge = document.getElementById('questionBadge');
-    const questionText = document.getElementById('questionText');
-    const answerInput = document.getElementById('answerInput');
-    const submitBtn = document.getElementById('submitBtn');
-    const aiThinking = document.getElementById('aiThinking');
-    const aiThinkingText = document.getElementById('aiThinkingText');
-    const answerSection = document.getElementById('answerSection');
-    const answerTimer = document.getElementById('answerTimer');
-    const completionArea = document.getElementById('completionArea');
-    const summaryStats = document.getElementById('summaryStats');
-    const transcriptList = document.getElementById('transcriptList');
+    // Start timer
+    const startTime = Date.now();
+    timerInterval = setInterval(() => {
+        const elapsed = Math.floor((Date.now() - startTime) / 1000);
+        const m = String(Math.floor(elapsed / 60)).padStart(2, '0');
+        const s = String(elapsed % 60).padStart(2, '0');
+        document.getElementById('timerText').textContent = `${m}:${s}`;
+    }, 1000);
 
-    // ─── STATE ──────────────────────────────────────────────
-    let currentQuestion = firstQuestion;
-    let interviewStartTime = Date.now();
-    let questionStartTime = Date.now();
-    let globalTimerInterval = null;
-    let answerTimerInterval = null;
-    let isSubmitting = false;
+    // Setup speech
+    setupSpeech();
 
-    // ─── INITIALIZE ─────────────────────────────────────────
-    function init() {
-        headerTitle.textContent = `${candidateName}'s Interview`;
-        headerRole.textContent = role;
+    // Setup submit handlers
+    setupSpokenHandlers();
+    setupMCQHandlers();
+    setupCodingHandlers();
+    setupInterruptHandler();
+    setupSkipButton();
 
-        // Start global timer
-        globalTimerInterval = setInterval(updateGlobalTimer, 1000);
+    // Start — first question arrives via URL params
+    loadFirstQuestion();
+});
 
-        // Show first question
-        showQuestion(currentQuestion);
+// ─── SPEECH SETUP ────────────────────────────────────────────
+function setupSpeech() {
+    const speechBtn = document.getElementById('speechToggle');
+    const micBtn = document.getElementById('micToggle');
+    const statusEl = document.getElementById('speechStatus');
+
+    // TTS toggle
+    speechBtn.addEventListener('click', () => {
+        speechEnabled = !speechEnabled;
+        speechBtn.textContent = speechEnabled ? '🔊 Voice On' : '🔇 Voice Off';
+        speechBtn.classList.toggle('active', speechEnabled);
+    });
+
+    // STT setup
+    const SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition;
+    if (SpeechRecognition) {
+        recognition = new SpeechRecognition();
+        recognition.continuous = true;
+        recognition.interimResults = true;
+        recognition.lang = 'en-US';
+
+        recognition.onresult = (event) => {
+            let finalTranscript = '';
+            let interimTranscript = '';
+
+            for (let i = event.resultIndex; i < event.results.length; i++) {
+                const transcript = event.results[i][0].transcript;
+                if (event.results[i].isFinal) {
+                    finalTranscript += transcript;
+                } else {
+                    interimTranscript += transcript;
+                }
+            }
+
+            // Find the active textarea
+            const activeInput = getActiveTextarea();
+            if (activeInput && finalTranscript) {
+                activeInput.value += (activeInput.value ? ' ' : '') + finalTranscript;
+                activeInput.dispatchEvent(new Event('input'));
+            }
+
+            if (interimTranscript) {
+                statusEl.textContent = `🎙️ "${interimTranscript.slice(-50)}..."`;
+            } else if (finalTranscript) {
+                statusEl.textContent = '✅ Speech captured';
+            }
+        };
+
+        recognition.onerror = (e) => {
+            if (e.error !== 'no-speech') {
+                statusEl.textContent = `⚠️ Mic error: ${e.error}`;
+            }
+        };
+
+        recognition.onend = () => {
+            if (micEnabled) recognition.start(); // auto-restart
+        };
+
+        micBtn.addEventListener('click', () => {
+            micEnabled = !micEnabled;
+            if (micEnabled) {
+                recognition.start();
+                micBtn.textContent = '🎤 Mic On';
+                micBtn.classList.add('active');
+                statusEl.textContent = '🎙️ Listening...';
+            } else {
+                recognition.stop();
+                micBtn.textContent = '🎤 Mic Off';
+                micBtn.classList.remove('active');
+                statusEl.textContent = '';
+            }
+        });
+    } else {
+        micBtn.disabled = true;
+        micBtn.textContent = '🎤 Not supported';
+        statusEl.textContent = 'Speech input not supported in this browser';
+    }
+}
+
+function getActiveTextarea() {
+    if (!document.getElementById('spokenArea').classList.contains('hidden')) {
+        return document.getElementById('answerInput');
+    }
+    if (!document.getElementById('mcqJustifyArea').classList.contains('hidden')) {
+        return document.getElementById('mcqJustifyInput');
+    }
+    if (!document.getElementById('interruptModal').classList.contains('hidden')) {
+        return document.getElementById('interruptInput');
+    }
+    if (!document.getElementById('codingArea').classList.contains('hidden')) {
+        return document.getElementById('codeExplanation');
+    }
+    return null;
+}
+
+function speak(text) {
+    if (!speechEnabled || !synth) return;
+    synth.cancel();
+    const utterance = new SpeechSynthesisUtterance(text);
+    utterance.rate = 1.0;
+    utterance.pitch = 1.0;
+    // Prefer a natural-sounding voice
+    const voices = synth.getVoices();
+    const preferred = voices.find(v => v.name.includes('Google') && v.lang.startsWith('en'))
+        || voices.find(v => v.lang.startsWith('en'));
+    if (preferred) utterance.voice = preferred;
+    synth.speak(utterance);
+}
+
+// ─── LOAD FIRST QUESTION ────────────────────────────────────
+async function loadFirstQuestion() {
+    try {
+        const res = await fetch(`${API}/interview/${sessionId}/transcript`);
+        if (!res.ok) throw new Error('Could not load session');
+
+        // The session should already have the first question from the start call.
+        // We need to re-fetch by checking the state. Let's just show loading briefly.
+        // Actually the first question was returned when session was created on landing page.
+        // We stored it in sessionStorage.
+        const firstQ = JSON.parse(sessionStorage.getItem('firstQuestion') || 'null');
+        if (firstQ) {
+            handleResponse(firstQ);
+        } else {
+            // Fallback: fetch transcript
+            const data = await res.json();
+            if (data.slots && data.slots.length > 0) {
+                const q = data.slots[0];
+                handleResponse({
+                    question: q.question,
+                    questionNumber: 1,
+                    totalQuestions: 10,
+                    type: q.type || 'spoken',
+                    slotType: q.type || 'spoken',
+                    state: 'WARMUP',
+                });
+            }
+        }
+    } catch (err) {
+        console.error('Error loading first question:', err);
+    }
+}
+
+// ─── RESPONSE ROUTER ────────────────────────────────────────
+function handleResponse(data) {
+    hideAll();
+    document.getElementById('loadingState').classList.add('hidden');
+
+    console.log('[handleResponse]', data.type, data.slotType, data.state, data);
+
+    if (data.state === 'COMPLETED') {
+        showCompletion(data);
+        return;
     }
 
-    // ─── SHOW QUESTION ─────────────────────────────────────
-    function showQuestion(data) {
-        loadingState.classList.add('hidden');
-        questionArea.classList.remove('hidden');
-        aiThinking.classList.add('hidden');
-        answerSection.classList.remove('hidden');
+    updateProgress(data.questionNumber, data.totalQuestions);
 
-        // Update badge
-        if (data.isFollowUp) {
-            questionBadge.className = 'question-badge follow-up';
-            questionBadge.innerHTML = `<span>↳ Follow-up (Depth ${data.followUpDepth})</span>`;
-        } else {
-            questionBadge.className = 'question-badge';
-            questionBadge.innerHTML = `<span>Question ${data.questionNumber} of ${data.totalQuestions}</span>`;
+    // IMPORTANT: check specific types BEFORE generic slotType
+    if (data.type === 'mcq_justify') {
+        showMCQJustify(data);
+    } else if (data.type === 'coding_interrupt') {
+        showCodingInterrupt(data);
+    } else if (data.type === 'coding_resume') {
+        showCodingResume();
+    } else if (data.type === 'mcq' || data.slotType === 'mcq') {
+        showMCQ(data);
+    } else if (data.type === 'coding' || data.slotType === 'coding') {
+        showCoding(data);
+    } else {
+        showSpokenQuestion(data);
+    }
+}
+
+// ─── SHOW SPOKEN QUESTION ───────────────────────────────────
+function showSpokenQuestion(data) {
+    const area = document.getElementById('spokenArea');
+    area.classList.remove('hidden');
+
+    const badge = document.getElementById('questionBadge');
+    if (data.isFollowUp) {
+        badge.className = 'question-badge follow-up';
+        badge.querySelector('span').textContent = `↳ Follow-up (Depth ${data.followUpDepth})`;
+    } else {
+        badge.className = 'question-badge';
+        badge.querySelector('span').textContent = `Question ${data.questionNumber}`;
+    }
+
+    document.getElementById('questionText').textContent = data.question;
+    document.getElementById('answerInput').value = '';
+    document.getElementById('submitBtn').disabled = true;
+
+    // Speak the question
+    speak(data.question);
+
+    // Start answer timer
+    answerStartTime = Date.now();
+    clearInterval(answerTimerInterval);
+    answerTimerInterval = setInterval(() => {
+        const s = Math.floor((Date.now() - answerStartTime) / 1000);
+        document.getElementById('answerTimer').textContent = `Thinking time: ${s}s`;
+    }, 1000);
+
+    // Focus input
+    setTimeout(() => document.getElementById('answerInput').focus(), 300);
+}
+
+// ─── SHOW MCQ ───────────────────────────────────────────────
+function showMCQ(data) {
+    const area = document.getElementById('mcqArea');
+    area.classList.remove('hidden');
+
+    document.getElementById('mcqQuestionText').textContent = data.question;
+
+    const optionsContainer = document.getElementById('mcqOptions');
+    optionsContainer.innerHTML = '';
+    selectedMCQOption = null;
+    document.getElementById('mcqSubmitBtn').disabled = true;
+
+    // Safety check: if options are missing, show error
+    const options = data.options || [];
+    if (options.length === 0) {
+        console.error('[showMCQ] No options received!', data);
+        optionsContainer.innerHTML = '<p style="color: var(--danger);">⚠️ Options failed to load. Click Skip to continue.</p>';
+        return;
+    }
+
+    options.forEach(opt => {
+        const btn = document.createElement('button');
+        btn.className = 'mcq-option';
+        btn.textContent = opt;
+        btn.addEventListener('click', () => {
+            // Deselect others
+            optionsContainer.querySelectorAll('.mcq-option').forEach(b => b.classList.remove('selected'));
+            btn.classList.add('selected');
+            selectedMCQOption = opt;
+            document.getElementById('mcqSubmitBtn').disabled = false;
+        });
+        optionsContainer.appendChild(btn);
+    });
+
+    // Speak the question
+    speak(data.question);
+
+    // Timer
+    mcqStartTime = Date.now();
+    clearInterval(mcqTimerInterval);
+    mcqTimerInterval = setInterval(() => {
+        const s = Math.floor((Date.now() - mcqStartTime) / 1000);
+        document.getElementById('mcqTimer').textContent = `Time: ${s}s`;
+    }, 1000);
+}
+
+// ─── SHOW MCQ JUSTIFY ───────────────────────────────────────
+function showMCQJustify(data) {
+    const area = document.getElementById('mcqJustifyArea');
+    area.classList.remove('hidden');
+
+    document.getElementById('mcqJustifyQuestion').textContent = data.question;
+    document.getElementById('mcqJustifyInput').value = '';
+    document.getElementById('mcqJustifySubmitBtn').disabled = true;
+
+    const resultBadge = document.getElementById('mcqResultBadge');
+    if (data.mcqResult?.isCorrect) {
+        resultBadge.innerHTML = '<span style="color: var(--success);">✅ Correct answer!</span>';
+    } else {
+        resultBadge.innerHTML = `<span style="color: var(--danger);">❌ Incorrect — correct was ${data.mcqResult?.correct}</span>`;
+    }
+
+    speak(data.question);
+    setTimeout(() => document.getElementById('mcqJustifyInput').focus(), 300);
+}
+
+// ─── SHOW CODING ────────────────────────────────────────────
+function showCoding(data) {
+    const area = document.getElementById('codingArea');
+    area.classList.remove('hidden');
+
+    document.getElementById('codingProblem').textContent = data.problem;
+    document.getElementById('codingInput').textContent = data.exampleInput;
+    document.getElementById('codingOutput').textContent = data.exampleOutput;
+
+    const editor = document.getElementById('codeEditor');
+    editor.value = '';
+    document.getElementById('codeExplanation').value = '';
+    document.getElementById('codeSubmitBtn').disabled = true;
+    document.getElementById('pasteWarning').classList.add('hidden');
+
+    // Reset tracking
+    pasteCount = 0;
+    firstKeystrokeTime = null;
+    codingStartTimestamp = Date.now();
+    interruptTriggered = false;
+
+    speak(data.problem);
+
+    // Timer
+    codingStartTime = Date.now();
+    clearInterval(codingTimerInterval);
+    codingTimerInterval = setInterval(() => {
+        const s = Math.floor((Date.now() - codingStartTime) / 1000);
+        document.getElementById('codingTimer').textContent = `Time: ${s}s`;
+
+        // Trigger interruption after ~30 seconds of coding if not yet interrupted
+        if (s >= 30 && !interruptTriggered && editor.value.trim().length > 20) {
+            triggerInterruption();
+        }
+    }, 1000);
+}
+
+// ─── SHOW CODING INTERRUPT ──────────────────────────────────
+function showCodingInterrupt(data) {
+    const modal = document.getElementById('interruptModal');
+    modal.classList.remove('hidden');
+    modal.style.display = 'flex';
+
+    document.getElementById('interruptQuestion').textContent = data.question;
+    document.getElementById('interruptInput').value = '';
+    document.getElementById('interruptSubmitBtn').disabled = true;
+
+    speak(data.question);
+    setTimeout(() => document.getElementById('interruptInput').focus(), 300);
+}
+
+function showCodingResume() {
+    const modal = document.getElementById('interruptModal');
+    modal.classList.add('hidden');
+    modal.style.display = 'none';
+
+    document.getElementById('codingArea').classList.remove('hidden');
+    document.getElementById('codeEditor').focus();
+}
+
+// ─── TRIGGER CODING INTERRUPTION ────────────────────────────
+async function triggerInterruption() {
+    if (interruptTriggered) return;
+    interruptTriggered = true;
+
+    try {
+        const code = document.getElementById('codeEditor').value;
+        const res = await fetch(`${API}/interview/coding-interrupt`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ sessionId, currentCode: code }),
+        });
+        const data = await res.json();
+        if (data.question) {
+            showCodingInterrupt(data);
+        }
+    } catch (err) {
+        console.error('Interruption error:', err);
+    }
+}
+
+// ─── COMPLETION ─────────────────────────────────────────────
+function showCompletion(data) {
+    clearInterval(timerInterval);
+    clearInterval(answerTimerInterval);
+    clearInterval(mcqTimerInterval);
+    clearInterval(codingTimerInterval);
+    if (synth) synth.cancel();
+
+    hideAll();
+    const area = document.getElementById('completionArea');
+    area.classList.remove('hidden');
+
+    if (data.summary) {
+        const s = data.summary;
+        document.getElementById('summaryStats').innerHTML = `
+            <div class="stat-card"><div class="stat-number">${s.totalQuestions}</div><div class="stat-label">Questions</div></div>
+            <div class="stat-card"><div class="stat-number">${s.spokenQuestions || '-'}</div><div class="stat-label">Spoken</div></div>
+            <div class="stat-card"><div class="stat-number">${s.mcqQuestions || '-'}</div><div class="stat-label">MCQs</div></div>
+            <div class="stat-card"><div class="stat-number">${s.codingQuestions || '-'}</div><div class="stat-label">Coding</div></div>
+            <div class="stat-card"><div class="stat-number">${s.averageQuality}/10</div><div class="stat-label">Avg Quality</div></div>
+            <div class="stat-card"><div class="stat-number">${s.durationFormatted}</div><div class="stat-label">Duration</div></div>
+        `;
+    }
+
+    // Load full transcript
+    loadTranscript();
+}
+
+async function loadTranscript() {
+    try {
+        const res = await fetch(`${API}/interview/${sessionId}/transcript`);
+        const data = await res.json();
+        renderTranscript(data);
+    } catch (err) {
+        console.error('Error loading transcript:', err);
+    }
+}
+
+function renderTranscript(data) {
+    const container = document.getElementById('transcriptList');
+    if (!data.slots) return;
+
+    container.innerHTML = data.slots.map((slot, i) => {
+        const typeLabel = slot.type === 'mcq' ? '📋 MCQ' : slot.type === 'coding' ? '💻 Coding' : '🎤 Spoken';
+        const typeClass = slot.type === 'mcq' ? 'mcq' : slot.type === 'coding' ? 'coding' : '';
+
+        let content = '';
+
+        if (slot.type === 'spoken') {
+            const q = slot.evaluation?.answer_quality ?? '-';
+            const clarity = slot.evaluation?.clarity ?? '-';
+            const feedback = slot.evaluation?.brief_feedback ?? '';
+
+            content = `
+                <div class="transcript-item">
+                    <div class="transcript-q">${typeLabel} Q${i + 1}: ${slot.question}</div>
+                    <div class="transcript-a">${slot.answer || '<em>No answer</em>'}</div>
+                    <div class="transcript-meta">Quality: ${q}/10 | Clarity: ${clarity}</div>
+                    ${feedback ? `<div class="transcript-feedback">💬 ${feedback}</div>` : ''}
+                    ${(slot.followUps || []).map(fu => `
+                        <div class="transcript-followup">
+                            <div class="transcript-q">↳ Follow-up (Depth ${fu.depth}): ${fu.question}</div>
+                            <div class="transcript-a">${fu.answer || '<em>No answer</em>'}</div>
+                            <div class="transcript-meta">Quality: ${fu.evaluation?.answer_quality ?? '-'}/10 | Clarity: ${fu.evaluation?.clarity ?? '-'}</div>
+                        </div>
+                    `).join('')}
+                </div>
+            `;
+        } else if (slot.type === 'mcq') {
+            const isCorrect = slot.selectedOption?.charAt(0) === slot.correct;
+            content = `
+                <div class="transcript-item ${typeClass}">
+                    <div class="transcript-q">${typeLabel} Q${i + 1}: ${slot.question}</div>
+                    <div class="transcript-a">Selected: ${slot.selectedOption || '-'} ${isCorrect ? '✅' : `❌ (Correct: ${slot.correct})`}</div>
+                    ${slot.mcqJustification ? `<div class="transcript-a"><em>Justification:</em> ${slot.mcqJustification}</div>` : ''}
+                </div>
+            `;
+        } else if (slot.type === 'coding') {
+            const cq = slot.codingEval?.code_quality ?? '-';
+            content = `
+                <div class="transcript-item ${typeClass}">
+                    <div class="transcript-q">${typeLabel} Q${i + 1}: ${slot.question}</div>
+                    ${slot.code ? `<pre class="transcript-code">${escapeHtml(slot.code)}</pre>` : '<div class="transcript-a"><em>No code submitted</em></div>'}
+                    ${slot.explanation ? `<div class="transcript-a"><em>Explanation:</em> ${slot.explanation}</div>` : ''}
+                    <div class="transcript-meta">Code Quality: ${cq}/10 | Logic: ${slot.codingEval?.logic_understanding ?? '-'}</div>
+                    ${slot.codingEval?.brief_feedback ? `<div class="transcript-feedback">💬 ${slot.codingEval.brief_feedback}</div>` : ''}
+                    ${(slot.interruptionResponses || []).map(ir => `
+                        <div class="transcript-followup">
+                            <div class="transcript-q">🛑 Interruption: ${ir.question}</div>
+                            <div class="transcript-a">${ir.answer}</div>
+                        </div>
+                    `).join('')}
+                </div>
+            `;
         }
 
-        // Update question text with animation
-        const card = document.getElementById('questionCard');
-        card.style.animation = 'none';
-        card.offsetHeight; // Trigger reflow
-        card.style.animation = 'slideIn 0.4s ease';
-        questionText.textContent = data.question;
+        return content;
+    }).join('');
+}
 
-        // Update progress
-        const progress = ((data.questionNumber - 1) / data.totalQuestions) * 100;
-        progressFill.style.width = `${progress}%`;
-        progressText.textContent = `${data.questionNumber}/${data.totalQuestions}`;
+// ─── SETUP: SPOKEN HANDLERS ────────────────────────────────
+function setupSpokenHandlers() {
+    const input = document.getElementById('answerInput');
+    const btn = document.getElementById('submitBtn');
 
-        // Reset answer input
-        answerInput.value = '';
-        answerInput.focus();
-        submitBtn.disabled = true;
+    input.addEventListener('input', () => {
+        btn.disabled = input.value.trim().length === 0;
+    });
 
-        // Start answer timer
-        questionStartTime = Date.now();
+    btn.addEventListener('click', async () => {
+        const answer = input.value.trim();
+        if (!answer) return;
+
+        btn.disabled = true;
         clearInterval(answerTimerInterval);
-        answerTimerInterval = setInterval(updateAnswerTimer, 1000);
-    }
-
-    // ─── SUBMIT ANSWER ─────────────────────────────────────
-    async function submitAnswer() {
-        const answer = answerInput.value.trim();
-        if (!answer || isSubmitting) return;
-
-        isSubmitting = true;
-        submitBtn.disabled = true;
-        submitBtn.innerHTML = '<div class="spinner" style="width:14px;height:14px;border-width:2px;"></div> Submitting...';
-        answerSection.classList.add('hidden');
-        aiThinking.classList.remove('hidden');
-
-        // Randomize thinking messages
-        const thinkingMessages = [
-            'Interviewer is reviewing your answer...',
-            'Analyzing your response...',
-            'Preparing next question...',
-            'Evaluating depth of understanding...',
-            'Thinking about a follow-up...',
-        ];
-        aiThinkingText.textContent = thinkingMessages[Math.floor(Math.random() * thinkingMessages.length)];
+        showThinking('Evaluating your answer...');
 
         try {
-            const response = await fetch('/api/interview/answer', {
+            const res = await fetch(`${API}/interview/answer`, {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify({ sessionId, answer }),
             });
-
-            if (!response.ok) {
-                const err = await response.json();
-                throw new Error(err.error || 'Failed to submit answer');
-            }
-
-            const result = await response.json();
-
-            if (result.state === 'COMPLETED') {
-                showCompletion(result);
-            } else {
-                currentQuestion = result;
-                showQuestion(result);
-            }
+            const data = await res.json();
+            hideThinking();
+            handleResponse(data);
         } catch (err) {
-            alert(`Error: ${err.message}`);
-            answerSection.classList.remove('hidden');
-            aiThinking.classList.add('hidden');
-        } finally {
-            isSubmitting = false;
-            submitBtn.innerHTML = 'Submit Answer →';
+            hideThinking();
+            console.error('Error:', err);
+            alert('Something went wrong. Please try again.');
+            btn.disabled = false;
+        }
+    });
+
+    // Enter key submit (Ctrl+Enter)
+    input.addEventListener('keydown', (e) => {
+        if (e.ctrlKey && e.key === 'Enter' && !btn.disabled) {
+            btn.click();
+        }
+    });
+}
+
+// ─── SETUP: MCQ HANDLERS ───────────────────────────────────
+function setupMCQHandlers() {
+    const submitBtn = document.getElementById('mcqSubmitBtn');
+    submitBtn.addEventListener('click', async () => {
+        if (!selectedMCQOption) return;
+
+        submitBtn.disabled = true;
+        clearInterval(mcqTimerInterval);
+        showThinking('Processing your choice...');
+
+        const selectionTime = Date.now() - mcqStartTime;
+
+        try {
+            const res = await fetch(`${API}/interview/mcq-answer`, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ sessionId, selectedOption: selectedMCQOption, selectionTimeMs: selectionTime }),
+            });
+            const data = await res.json();
+            hideThinking();
+            handleResponse(data);
+        } catch (err) {
+            hideThinking();
+            console.error('Error:', err);
             submitBtn.disabled = false;
         }
-    }
+    });
 
-    // ─── COMPLETION ─────────────────────────────────────────
-    async function showCompletion(result) {
-        clearInterval(globalTimerInterval);
-        clearInterval(answerTimerInterval);
+    // MCQ Justify
+    const justifyInput = document.getElementById('mcqJustifyInput');
+    const justifyBtn = document.getElementById('mcqJustifySubmitBtn');
 
-        questionArea.classList.add('hidden');
-        completionArea.classList.remove('hidden');
+    justifyInput.addEventListener('input', () => {
+        justifyBtn.disabled = justifyInput.value.trim().length === 0;
+    });
 
-        // Show summary stats
-        const summary = result.summary;
-        summaryStats.innerHTML = `
-            <div class="summary-stat slide-in">
-                <div class="summary-stat-value">${summary.totalQuestions}</div>
-                <div class="summary-stat-label">Questions</div>
-            </div>
-            <div class="summary-stat slide-in" style="animation-delay: 0.1s;">
-                <div class="summary-stat-value">${summary.averageQuality}/10</div>
-                <div class="summary-stat-label">Avg Quality</div>
-            </div>
-            <div class="summary-stat slide-in" style="animation-delay: 0.2s;">
-                <div class="summary-stat-value">${summary.durationFormatted}</div>
-                <div class="summary-stat-label">Duration</div>
-            </div>
-        `;
+    justifyBtn.addEventListener('click', async () => {
+        const justification = justifyInput.value.trim();
+        if (!justification) return;
 
-        // Load full transcript
+        justifyBtn.disabled = true;
+        showThinking('Evaluating your reasoning...');
+
         try {
-            const response = await fetch(`/api/interview/${sessionId}/transcript`);
-            const transcript = await response.json();
-            renderTranscript(transcript);
-        } catch (err) {
-            transcriptList.innerHTML = '<p style="color: var(--text-muted);">Could not load transcript.</p>';
-        }
-    }
-
-    // ─── RENDER TRANSCRIPT ─────────────────────────────────
-    function renderTranscript(transcript) {
-        let html = '';
-
-        transcript.questions.forEach((q, i) => {
-            html += `
-                <div class="transcript-item slide-in" style="animation-delay: ${i * 0.1}s;">
-                    <div class="transcript-question">Q${q.questionNumber}: ${escapeHtml(q.question)}</div>
-                    <div class="transcript-answer">${escapeHtml(q.answer || 'No answer')}</div>
-                    ${q.evaluation ? `
-                        <div class="transcript-eval">
-                            <span class="eval-badge quality">Quality: ${q.evaluation.answer_quality}/10</span>
-                            <span class="eval-badge clarity">Clarity: ${q.evaluation.clarity || 'N/A'}</span>
-                        </div>
-                        ${q.evaluation.brief_feedback ? `<p style="font-size: 0.8rem; color: var(--text-muted); margin-top: 4px; font-style: italic;">💬 ${escapeHtml(q.evaluation.brief_feedback)}</p>` : ''}
-                    ` : ''}
-                </div>
-            `;
-
-            // Follow-ups
-            q.followUps.forEach((fu, j) => {
-                html += `
-                    <div class="transcript-item slide-in" style="margin-left: 24px; border-left-color: var(--success); animation-delay: ${(i * 0.1) + ((j + 1) * 0.05)}s;">
-                        <div class="transcript-question" style="color: var(--success);">↳ Follow-up (Depth ${fu.depth}): ${escapeHtml(fu.question)}</div>
-                        <div class="transcript-answer">${escapeHtml(fu.answer || 'No answer')}</div>
-                        ${fu.evaluation ? `
-                            <div class="transcript-eval">
-                                <span class="eval-badge quality">Quality: ${fu.evaluation.answer_quality}/10</span>
-                                <span class="eval-badge clarity">Clarity: ${fu.evaluation.clarity || 'N/A'}</span>
-                            </div>
-                        ` : ''}
-                    </div>
-                `;
+            const res = await fetch(`${API}/interview/mcq-justify`, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ sessionId, justification }),
             });
-        });
-
-        transcriptList.innerHTML = html;
-    }
-
-    // ─── TIMERS ─────────────────────────────────────────────
-    function updateGlobalTimer() {
-        const elapsed = Math.floor((Date.now() - interviewStartTime) / 1000);
-        const mins = String(Math.floor(elapsed / 60)).padStart(2, '0');
-        const secs = String(elapsed % 60).padStart(2, '0');
-        timerText.textContent = `${mins}:${secs}`;
-    }
-
-    function updateAnswerTimer() {
-        const elapsed = Math.floor((Date.now() - questionStartTime) / 1000);
-        answerTimer.textContent = `Thinking time: ${elapsed}s`;
-    }
-
-    // ─── EVENT LISTENERS ────────────────────────────────────
-    answerInput.addEventListener('input', () => {
-        submitBtn.disabled = answerInput.value.trim().length === 0;
-    });
-
-    submitBtn.addEventListener('click', submitAnswer);
-
-    answerInput.addEventListener('keydown', (e) => {
-        if (e.key === 'Enter' && e.ctrlKey && !submitBtn.disabled) {
-            submitAnswer();
+            const data = await res.json();
+            hideThinking();
+            handleResponse(data);
+        } catch (err) {
+            hideThinking();
+            console.error('Error:', err);
+            justifyBtn.disabled = false;
         }
     });
 
-    // ─── UTILITIES ──────────────────────────────────────────
-    function escapeHtml(text) {
-        const div = document.createElement('div');
-        div.textContent = text;
-        return div.innerHTML;
-    }
+    justifyInput.addEventListener('keydown', (e) => {
+        if (e.ctrlKey && e.key === 'Enter' && !justifyBtn.disabled) {
+            justifyBtn.click();
+        }
+    });
+}
 
-    // ─── START ──────────────────────────────────────────────
-    init();
+// ─── SETUP: CODING HANDLERS ────────────────────────────────
+function setupCodingHandlers() {
+    const editor = document.getElementById('codeEditor');
+    const explanation = document.getElementById('codeExplanation');
+    const submitBtn = document.getElementById('codeSubmitBtn');
 
-})();
+    // Enable submit when code exists
+    editor.addEventListener('input', () => {
+        submitBtn.disabled = editor.value.trim().length === 0;
+        if (!firstKeystrokeTime) firstKeystrokeTime = Date.now();
+    });
+
+    // Detect paste
+    editor.addEventListener('paste', (e) => {
+        pasteCount++;
+        document.getElementById('pasteWarning').classList.remove('hidden');
+
+        // Report to server
+        fetch(`${API}/interview/signal`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+                sessionId,
+                signalType: 'paste',
+                signalData: { pasteNumber: pasteCount, timestamp: Date.now() },
+            }),
+        }).catch(() => { });
+    });
+
+    // Tab key for indentation
+    editor.addEventListener('keydown', (e) => {
+        if (e.key === 'Tab') {
+            e.preventDefault();
+            const start = editor.selectionStart;
+            const end = editor.selectionEnd;
+            editor.value = editor.value.substring(0, start) + '  ' + editor.value.substring(end);
+            editor.selectionStart = editor.selectionEnd = start + 2;
+        }
+    });
+
+    submitBtn.addEventListener('click', async () => {
+        const code = editor.value.trim();
+        if (!code) return;
+
+        submitBtn.disabled = true;
+        clearInterval(codingTimerInterval);
+        showThinking('Evaluating your code...');
+
+        const behaviorData = {
+            pasteEvents: pasteCount,
+            timeToFirstKeystroke: firstKeystrokeTime ? firstKeystrokeTime - codingStartTimestamp : null,
+            totalTimeMs: Date.now() - codingStartTimestamp,
+        };
+
+        try {
+            const res = await fetch(`${API}/interview/code-submit`, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({
+                    sessionId,
+                    code,
+                    explanation: explanation.value.trim(),
+                    behaviorData,
+                }),
+            });
+            const data = await res.json();
+            hideThinking();
+            handleResponse(data);
+        } catch (err) {
+            hideThinking();
+            console.error('Error:', err);
+            submitBtn.disabled = false;
+        }
+    });
+}
+
+// ─── SETUP: INTERRUPT HANDLER ───────────────────────────────
+function setupInterruptHandler() {
+    const input = document.getElementById('interruptInput');
+    const btn = document.getElementById('interruptSubmitBtn');
+
+    input.addEventListener('input', () => {
+        btn.disabled = input.value.trim().length === 0;
+    });
+
+    btn.addEventListener('click', async () => {
+        const response = input.value.trim();
+        if (!response) return;
+
+        btn.disabled = true;
+
+        try {
+            const res = await fetch(`${API}/interview/interrupt-response`, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ sessionId, response }),
+            });
+            const data = await res.json();
+            handleResponse(data);
+        } catch (err) {
+            console.error('Error:', err);
+            btn.disabled = false;
+        }
+    });
+
+    input.addEventListener('keydown', (e) => {
+        if (e.ctrlKey && e.key === 'Enter' && !btn.disabled) {
+            btn.click();
+        }
+    });
+}
+
+// ─── SKIP BUTTON ────────────────────────────────────────────
+function setupSkipButton() {
+    const skipBtn = document.getElementById('skipBtn');
+    if (!skipBtn) return;
+
+    skipBtn.addEventListener('click', async () => {
+        skipBtn.disabled = true;
+        showThinking('Skipping to next question...');
+
+        try {
+            const res = await fetch(`${API}/interview/skip`, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ sessionId }),
+            });
+            const data = await res.json();
+            hideThinking();
+            skipBtn.disabled = false;
+            handleResponse(data);
+        } catch (err) {
+            hideThinking();
+            console.error('Skip error:', err);
+            skipBtn.disabled = false;
+        }
+    });
+}
+
+// ─── UI HELPERS ─────────────────────────────────────────────
+function hideAll() {
+    ['spokenArea', 'mcqArea', 'mcqJustifyArea', 'codingArea', 'completionArea', 'loadingState'].forEach(id => {
+        document.getElementById(id).classList.add('hidden');
+    });
+    document.getElementById('interruptModal').classList.add('hidden');
+    document.getElementById('interruptModal').style.display = 'none';
+    document.getElementById('aiThinking').classList.add('hidden');
+}
+
+function showThinking(text) {
+    document.getElementById('aiThinkingText').textContent = text || 'Interviewer is thinking...';
+    document.getElementById('aiThinking').classList.remove('hidden');
+}
+
+function hideThinking() {
+    document.getElementById('aiThinking').classList.add('hidden');
+}
+
+function updateProgress(current, total) {
+    const pct = Math.round((current / total) * 100);
+    document.getElementById('progressFill').style.width = `${pct}%`;
+    document.getElementById('progressText').textContent = `${current}/${total}`;
+}
+
+function escapeHtml(str) {
+    const div = document.createElement('div');
+    div.appendChild(document.createTextNode(str || ''));
+    return div.innerHTML;
+}

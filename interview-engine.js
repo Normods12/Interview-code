@@ -1,16 +1,17 @@
 // ============================================================
-// interview-engine.js — Interview State Machine (v1)
+// interview-engine.js — Interview State Machine (v2)
 // ============================================================
-// Manages the interview flow: questions, follow-ups, transitions.
-// Backend is the judge — AI is just a witness.
+// Full 10-question format: spoken + MCQ + coding
+// With interruptions, IDK detection, and SQLite persistence
 // ============================================================
 
 const { v4: uuidv4 } = require('uuid');
 const fs = require('fs');
 const path = require('path');
 const ai = require('./ai');
+const database = require('./database');
 
-// Ensure data directory exists
+// Ensure transcripts dir exists
 const TRANSCRIPTS_DIR = path.join(__dirname, 'data', 'transcripts');
 if (!fs.existsSync(TRANSCRIPTS_DIR)) {
     fs.mkdirSync(TRANSCRIPTS_DIR, { recursive: true });
@@ -22,25 +23,49 @@ const STATES = {
     WARMUP: 'WARMUP',
     CORE_QUESTION: 'CORE_QUESTION',
     FOLLOW_UP: 'FOLLOW_UP',
+    MCQ: 'MCQ',
+    MCQ_JUSTIFY: 'MCQ_JUSTIFY',
+    CODING: 'CODING',
+    CODING_INTERRUPT: 'CODING_INTERRUPT',
     COMPLETED: 'COMPLETED',
 };
 
-// ─── V1 CONFIG ──────────────────────────────────────────────
-const V1_CONFIG = {
-    totalQuestions: 3,         // 1 warmup + 2 core
-    maxFollowUps: 2,           // per question
-    difficulties: ['easy', 'medium', 'medium'],
+// ─── V2 CONFIG ──────────────────────────────────────────────
+// Interview structure: 10 slots total
+// Positions: 1=warmup, 2-3=spoken, 4=MCQ, 5-6=spoken, 7=MCQ, 8=spoken, 9=coding, 10=coding
+const V2_CONFIG = {
+    totalSlots: 10,
+    maxFollowUps: 2,
+    slotTypes: [
+        'spoken',   // 1 - warmup
+        'spoken',   // 2
+        'spoken',   // 3
+        'mcq',      // 4
+        'spoken',   // 5
+        'spoken',   // 6
+        'mcq',      // 7
+        'spoken',   // 8
+        'coding',   // 9
+        'spoken',   // 10 - final
+    ],
+    difficulties: [
+        'easy',     // 1
+        'easy',     // 2
+        'medium',   // 3
+        'medium',   // 4 - MCQ
+        'medium',   // 5
+        'medium',   // 6
+        'hard',     // 7 - MCQ
+        'hard',     // 8
+        'medium',   // 9 - coding
+        'hard',     // 10
+    ],
 };
 
 // ─── ACTIVE SESSIONS ───────────────────────────────────────
 const sessions = new Map();
 
-/**
- * Create a new interview session
- * @param {string} role - e.g. "Java Backend Developer"
- * @param {string} candidateName - Name of the student
- * @returns {Object} Session info
- */
+// ─── CREATE SESSION ─────────────────────────────────────────
 function createSession(role, candidateName) {
     const id = uuidv4();
     const session = {
@@ -48,113 +73,133 @@ function createSession(role, candidateName) {
         role,
         candidateName,
         state: STATES.CREATED,
-        currentQuestionIndex: 0,
+        currentSlotIndex: 0,
         currentFollowUpDepth: 0,
-        questions: [],           // { question, answer, evaluation, followUps: [{question, answer, evaluation}] }
-        currentQuestion: null,
+        coveredTopics: [],
+        slots: [],
         startTime: Date.now(),
         endTime: null,
+        // MCQ state
+        currentMCQ: null,
+        mcqJustifyPhase: null, // 'why_chose' or 'why_not'
+        // Coding state
+        currentCoding: null,
+        codingInterrupted: false,
     };
 
     sessions.set(id, session);
+    database.createInterview(id, candidateName, role, session.startTime);
+
     return { id, role, candidateName, state: session.state };
 }
 
-/**
- * Start the interview — generates the first question
- * @param {string} sessionId
- * @returns {Object} { question, questionNumber, state }
- */
+// ─── START INTERVIEW ────────────────────────────────────────
 async function startInterview(sessionId) {
     const session = sessions.get(sessionId);
     if (!session) throw new Error('Session not found');
     if (session.state !== STATES.CREATED) throw new Error('Interview already started');
 
     session.state = STATES.WARMUP;
-    session.currentQuestionIndex = 0;
+    session.currentSlotIndex = 0;
 
     const question = await ai.generateQuestion(
-        session.role,
-        1,
-        V1_CONFIG.difficulties[0]
+        session.role, 1, 'easy', session.coveredTopics
     );
 
-    session.currentQuestion = question;
-    session.questions.push({
+    const slot = {
+        index: 0,
+        type: 'spoken',
         question,
         answer: null,
         evaluation: null,
         followUps: [],
         timestamp: Date.now(),
-    });
+    };
+    session.slots.push(slot);
+
+    // Save to DB
+    database.stmts.insertQuestion.run(
+        sessionId, 1, 'spoken', 'easy', question, Date.now()
+    );
 
     return {
         question,
         questionNumber: 1,
-        totalQuestions: V1_CONFIG.totalQuestions,
+        totalQuestions: V2_CONFIG.totalSlots,
         state: session.state,
         type: 'spoken',
+        slotType: 'spoken',
     };
 }
 
-/**
- * Submit an answer and get the next action (follow-up or next question)
- * @param {string} sessionId
- * @param {string} answer - The candidate's answer
- * @returns {Object} Next question/follow-up or completion
- */
+// ─── SUBMIT SPOKEN ANSWER ───────────────────────────────────
 async function submitAnswer(sessionId, answer) {
     const session = sessions.get(sessionId);
     if (!session) throw new Error('Session not found');
     if (session.state === STATES.COMPLETED) throw new Error('Interview already completed');
 
-    const qIndex = session.currentQuestionIndex;
-    const currentQ = session.questions[qIndex];
+    const slotIndex = session.currentSlotIndex;
+    const currentSlot = session.slots[slotIndex];
     const answerTimestamp = Date.now();
 
-    // Are we answering a follow-up or the main question?
+    // Handle follow-up answers vs main answers
     if (session.currentFollowUpDepth > 0) {
-        // Answering a follow-up
         const fuIndex = session.currentFollowUpDepth - 1;
-        currentQ.followUps[fuIndex].answer = answer;
-        currentQ.followUps[fuIndex].answerTimestamp = answerTimestamp;
+        currentSlot.followUps[fuIndex].answer = answer;
+        currentSlot.followUps[fuIndex].answerTimestamp = answerTimestamp;
 
-        // Evaluate follow-up answer
         const evaluation = await ai.evaluateAnswer(
-            currentQ.followUps[fuIndex].question,
-            answer
+            currentSlot.followUps[fuIndex].question, answer
         );
-        currentQ.followUps[fuIndex].evaluation = evaluation;
-    } else {
-        // Answering the main question
-        currentQ.answer = answer;
-        currentQ.answerTimestamp = answerTimestamp;
+        currentSlot.followUps[fuIndex].evaluation = evaluation;
 
-        // Evaluate main answer
-        const evaluation = await ai.evaluateAnswer(currentQ.question, answer);
-        currentQ.evaluation = evaluation;
+        // Update DB
+        const fuRow = database.stmts.getLastFollowUp.get(sessionId, currentSlot.dbId);
+        if (fuRow) {
+            database.stmts.updateFollowUpAnswer.run(
+                answer, evaluation.answer_quality, evaluation.confidence,
+                evaluation.clarity, evaluation.brief_feedback,
+                answerTimestamp, answerTimestamp - currentSlot.followUps[fuIndex].timestamp,
+                fuRow.id
+            );
+        }
+    } else {
+        currentSlot.answer = answer;
+        currentSlot.answerTimestamp = answerTimestamp;
+
+        const evaluation = await ai.evaluateAnswer(currentSlot.question, answer);
+        currentSlot.evaluation = evaluation;
+
+        // Extract topic
+        if (evaluation.concept_coverage && evaluation.concept_coverage.length > 0) {
+            session.coveredTopics.push(...evaluation.concept_coverage);
+        }
+
+        // Update DB
+        database.stmts.updateQuestionAnswer.run(
+            answer, evaluation.answer_quality,
+            JSON.stringify(evaluation.concept_coverage || []),
+            evaluation.confidence, evaluation.clarity, evaluation.brief_feedback,
+            answerTimestamp, answerTimestamp - currentSlot.timestamp,
+            sessionId, slotIndex + 1
+        );
     }
 
-    // ─── CHECK IF CANDIDATE DOESN'T KNOW ────────────────────
-    // If answer is "I don't know" or very low quality, skip follow-ups
-    // A real interviewer would just move on, not keep pushing
+    // ─── IDK DETECTION ──────────────────────────────────────
     const isIdkAnswer = detectDontKnow(answer);
-    const lastEvalQuality = getLastEvalQuality(currentQ, session.currentFollowUpDepth);
-    const shouldSkipFollowUps = isIdkAnswer || lastEvalQuality <= 2;
+    const lastQuality = getLastEvalQuality(currentSlot, session.currentFollowUpDepth);
+    const shouldSkipFollowUps = isIdkAnswer || lastQuality <= 2;
 
-    // Decide next action: more follow-ups, or next question?
-    if (session.currentFollowUpDepth < V1_CONFIG.maxFollowUps && !shouldSkipFollowUps) {
-        // Generate a follow-up
+    // ─── SHOULD WE DO FOLLOW-UPS? ──────────────────────────
+    if (session.currentFollowUpDepth < V2_CONFIG.maxFollowUps && !shouldSkipFollowUps) {
         session.currentFollowUpDepth++;
         session.state = STATES.FOLLOW_UP;
 
         const followUpQuestion = await ai.generateFollowUp(
-            currentQ.question,
-            answer,
-            session.currentFollowUpDepth
+            currentSlot.question, answer, session.currentFollowUpDepth
         );
 
-        currentQ.followUps.push({
+        currentSlot.followUps.push({
             question: followUpQuestion,
             answer: null,
             evaluation: null,
@@ -162,96 +207,342 @@ async function submitAnswer(sessionId, answer) {
             timestamp: Date.now(),
         });
 
+        // Save to DB
+        if (currentSlot.dbId) {
+            database.stmts.insertFollowUp.run(
+                sessionId, currentSlot.dbId, session.currentFollowUpDepth,
+                followUpQuestion, Date.now()
+            );
+        }
+
         return {
             question: followUpQuestion,
-            questionNumber: qIndex + 1,
-            totalQuestions: V1_CONFIG.totalQuestions,
+            questionNumber: slotIndex + 1,
+            totalQuestions: V2_CONFIG.totalSlots,
             isFollowUp: true,
             followUpDepth: session.currentFollowUpDepth,
             state: session.state,
             type: 'spoken',
-            evaluation: session.currentFollowUpDepth > 1
-                ? currentQ.followUps[session.currentFollowUpDepth - 2]?.evaluation
-                : currentQ.evaluation,
+            slotType: 'spoken',
         };
     }
 
-    // Move to next question
-    session.currentFollowUpDepth = 0;
-    session.currentQuestionIndex++;
+    // ─── MOVE TO NEXT SLOT ──────────────────────────────────
+    return await advanceToNextSlot(session);
+}
 
-    if (session.currentQuestionIndex >= V1_CONFIG.totalQuestions) {
-        // Interview complete
-        session.state = STATES.COMPLETED;
-        session.endTime = Date.now();
+// ─── SUBMIT MCQ ANSWER ──────────────────────────────────────
+async function submitMCQAnswer(sessionId, selectedOption, selectionTimeMs) {
+    const session = sessions.get(sessionId);
+    if (!session) throw new Error('Session not found');
+    if (session.state !== STATES.MCQ) throw new Error('Not in MCQ state');
 
-        // Save transcript
-        saveTranscript(session);
+    const mcq = session.currentMCQ;
+    mcq.selectedOption = selectedOption;
+    mcq.selectionTimeMs = selectionTimeMs;
 
-        return {
-            state: STATES.COMPLETED,
-            message: 'Interview completed. Thank you!',
-            summary: buildSummary(session),
-        };
-    }
-
-    // Generate next question
-    const nextQIndex = session.currentQuestionIndex;
-    session.state = nextQIndex === 0 ? STATES.WARMUP : STATES.CORE_QUESTION;
-
-    const nextQuestion = await ai.generateQuestion(
-        session.role,
-        nextQIndex + 1,
-        V1_CONFIG.difficulties[nextQIndex]
+    // Save to DB
+    database.stmts.updateMcqAnswer.run(
+        selectedOption, selectionTimeMs, Date.now(),
+        sessionId, session.currentSlotIndex + 1
     );
 
-    session.currentQuestion = nextQuestion;
-    session.questions.push({
-        question: nextQuestion,
+    // Generate "why did you choose this?" follow-up
+    session.state = STATES.MCQ_JUSTIFY;
+    session.mcqJustifyPhase = 'why_chose';
+
+    const followUp = await ai.generateMCQFollowUp(
+        mcq.question, selectedOption, mcq.correct
+    );
+
+    mcq.justifyQuestion = followUp;
+
+    return {
+        question: followUp,
+        questionNumber: session.currentSlotIndex + 1,
+        totalQuestions: V2_CONFIG.totalSlots,
+        state: session.state,
+        type: 'mcq_justify',
+        slotType: 'mcq',
+        mcqResult: {
+            selected: selectedOption,
+            correct: mcq.correct,
+            isCorrect: selectedOption.charAt(0) === mcq.correct,
+        },
+    };
+}
+
+// ─── SUBMIT MCQ JUSTIFICATION ───────────────────────────────
+async function submitMCQJustification(sessionId, justification) {
+    const session = sessions.get(sessionId);
+    if (!session) throw new Error('Session not found');
+    if (session.state !== STATES.MCQ_JUSTIFY) throw new Error('Not in MCQ justify state');
+
+    const mcq = session.currentMCQ;
+    const evaluation = await ai.evaluateAnswer(mcq.justifyQuestion, justification);
+
+    // Save to DB
+    database.stmts.updateMcqJustification.run(
+        justification, evaluation.answer_quality,
+        null, null,
+        sessionId, session.currentSlotIndex + 1
+    );
+
+    // Store in slot
+    const slot = session.slots[session.currentSlotIndex];
+    slot.mcqJustification = justification;
+    slot.mcqJustificationEval = evaluation;
+
+    return await advanceToNextSlot(session);
+}
+
+// ─── SUBMIT CODE ────────────────────────────────────────────
+async function submitCode(sessionId, code, explanation, behaviorData) {
+    const session = sessions.get(sessionId);
+    if (!session) throw new Error('Session not found');
+
+    const coding = session.currentCoding;
+    const slot = session.slots[session.currentSlotIndex];
+
+    // Evaluate
+    const evaluation = await ai.evaluateCodingAnswer(coding.problem, code, explanation);
+
+    slot.code = code;
+    slot.explanation = explanation;
+    slot.codingEval = evaluation;
+    slot.behaviorData = behaviorData;
+
+    // Save to DB
+    database.stmts.updateCodingSubmission.run(
+        code, 'javascript', explanation,
+        evaluation.explanation_alignment,
+        evaluation.logic_understanding,
+        behaviorData?.pasteEvents || 0,
+        behaviorData?.timeToFirstKeystroke || null,
+        behaviorData?.totalTimeMs || null,
+        JSON.stringify(behaviorData?.editPattern || []),
+        JSON.stringify(slot.interruptionResponses || []),
+        Date.now(),
+        sessionId, session.currentSlotIndex + 1
+    );
+
+    return await advanceToNextSlot(session);
+}
+
+// ─── CODING INTERRUPTION RESPONSE ───────────────────────────
+async function submitInterruptionResponse(sessionId, response) {
+    const session = sessions.get(sessionId);
+    if (!session) throw new Error('Session not found');
+
+    const slot = session.slots[session.currentSlotIndex];
+    if (!slot.interruptionResponses) slot.interruptionResponses = [];
+    slot.interruptionResponses.push({
+        question: slot.interruptionQuestion,
+        answer: response,
+        timestamp: Date.now(),
+    });
+
+    session.codingInterrupted = true;
+    session.state = STATES.CODING;
+
+    return {
+        state: STATES.CODING,
+        type: 'coding_resume',
+        message: 'Continue coding...',
+    };
+}
+
+// ─── ADVANCE TO NEXT SLOT ───────────────────────────────────
+async function advanceToNextSlot(session) {
+    session.currentFollowUpDepth = 0;
+    session.currentSlotIndex++;
+
+    if (session.currentSlotIndex >= V2_CONFIG.totalSlots) {
+        return completeInterview(session);
+    }
+
+    const slotIndex = session.currentSlotIndex;
+    const slotType = V2_CONFIG.slotTypes[slotIndex];
+    const difficulty = V2_CONFIG.difficulties[slotIndex];
+
+    if (slotType === 'mcq') {
+        return await generateMCQSlot(session, difficulty);
+    } else if (slotType === 'coding') {
+        return await generateCodingSlot(session, difficulty);
+    } else {
+        return await generateSpokenSlot(session, slotIndex, difficulty);
+    }
+}
+
+// ─── GENERATE SLOTS ─────────────────────────────────────────
+
+async function generateSpokenSlot(session, slotIndex, difficulty) {
+    session.state = slotIndex === 0 ? STATES.WARMUP : STATES.CORE_QUESTION;
+
+    const question = await ai.generateQuestion(
+        session.role, slotIndex + 1, difficulty, session.coveredTopics
+    );
+
+    const slot = {
+        index: slotIndex,
+        type: 'spoken',
+        question,
         answer: null,
         evaluation: null,
         followUps: [],
         timestamp: Date.now(),
-    });
+    };
+    session.slots.push(slot);
+
+    // Save to DB and capture the row ID
+    const result = database.stmts.insertQuestion.run(
+        session.id, slotIndex + 1, 'spoken', difficulty, question, Date.now()
+    );
+    slot.dbId = result.lastInsertRowid;
 
     return {
-        question: nextQuestion,
-        questionNumber: nextQIndex + 1,
-        totalQuestions: V1_CONFIG.totalQuestions,
+        question,
+        questionNumber: slotIndex + 1,
+        totalQuestions: V2_CONFIG.totalSlots,
         isFollowUp: false,
         state: session.state,
         type: 'spoken',
+        slotType: 'spoken',
     };
 }
 
-/**
- * Get the full transcript for a session
- */
-function getTranscript(sessionId) {
-    const session = sessions.get(sessionId);
-    if (!session) {
-        // Try loading from disk
-        const filePath = path.join(TRANSCRIPTS_DIR, `${sessionId}.json`);
-        if (fs.existsSync(filePath)) {
-            return JSON.parse(fs.readFileSync(filePath, 'utf-8'));
-        }
-        throw new Error('Session not found');
-    }
-    return buildTranscript(session);
+async function generateMCQSlot(session, difficulty) {
+    session.state = STATES.MCQ;
+
+    const mcq = await ai.generateMCQ(session.role, difficulty, session.coveredTopics);
+    session.currentMCQ = mcq;
+
+    if (mcq.topic) session.coveredTopics.push(mcq.topic);
+
+    const slot = {
+        index: session.currentSlotIndex,
+        type: 'mcq',
+        question: mcq.question,
+        options: mcq.options,
+        correct: mcq.correct,
+        timestamp: Date.now(),
+    };
+    session.slots.push(slot);
+
+    // Save to DB
+    database.stmts.insertMcq.run(
+        session.id, session.currentSlotIndex + 1,
+        mcq.question, JSON.stringify(mcq.options), Date.now()
+    );
+
+    return {
+        question: mcq.question,
+        options: mcq.options,
+        questionNumber: session.currentSlotIndex + 1,
+        totalQuestions: V2_CONFIG.totalSlots,
+        state: session.state,
+        type: 'mcq',
+        slotType: 'mcq',
+    };
 }
 
-/**
- * Get session info
- */
+async function generateCodingSlot(session, difficulty) {
+    session.state = STATES.CODING;
+    session.codingInterrupted = false;
+
+    const coding = await ai.generateCodingQuestion(session.role, difficulty);
+    session.currentCoding = coding;
+
+    if (coding.topic) session.coveredTopics.push(coding.topic);
+
+    const slot = {
+        index: session.currentSlotIndex,
+        type: 'coding',
+        problem: coding.problem,
+        exampleInput: coding.example_input,
+        exampleOutput: coding.example_output,
+        timestamp: Date.now(),
+    };
+    session.slots.push(slot);
+
+    // Save to DB
+    database.stmts.insertCoding.run(
+        session.id, session.currentSlotIndex + 1, coding.problem, Date.now()
+    );
+
+    return {
+        problem: coding.problem,
+        exampleInput: coding.example_input,
+        exampleOutput: coding.example_output,
+        questionNumber: session.currentSlotIndex + 1,
+        totalQuestions: V2_CONFIG.totalSlots,
+        state: session.state,
+        type: 'coding',
+        slotType: 'coding',
+    };
+}
+
+// ─── GENERATE CODING INTERRUPTION ───────────────────────────
+async function triggerCodingInterruption(sessionId, currentCode) {
+    const session = sessions.get(sessionId);
+    if (!session) throw new Error('Session not found');
+    if (session.codingInterrupted) return null; // Only interrupt once
+
+    const slot = session.slots[session.currentSlotIndex];
+    const question = await ai.generateCodingInterruption(
+        currentCode, session.currentCoding.problem
+    );
+
+    slot.interruptionQuestion = question;
+    session.state = STATES.CODING_INTERRUPT;
+
+    return {
+        question,
+        state: STATES.CODING_INTERRUPT,
+        type: 'coding_interrupt',
+    };
+}
+
+// ─── COMPLETE INTERVIEW ─────────────────────────────────────
+function completeInterview(session) {
+    session.state = STATES.COMPLETED;
+    session.endTime = Date.now();
+    const duration = session.endTime - session.startTime;
+
+    database.completeInterview(session.id, session.endTime, duration);
+    saveTranscript(session);
+
+    return {
+        state: STATES.COMPLETED,
+        message: 'Interview completed. Thank you!',
+        summary: buildSummary(session),
+    };
+}
+
+// ─── TRANSCRIPT & HELPERS ───────────────────────────────────
+
+function getTranscript(sessionId) {
+    const session = sessions.get(sessionId);
+    if (session) return buildTranscript(session);
+
+    // Try from DB
+    const dbTranscript = database.getFullTranscript(sessionId);
+    if (dbTranscript) return dbTranscript;
+
+    // Try from disk
+    const filePath = path.join(TRANSCRIPTS_DIR, `${sessionId}.json`);
+    if (fs.existsSync(filePath)) {
+        return JSON.parse(fs.readFileSync(filePath, 'utf-8'));
+    }
+
+    throw new Error('Session not found');
+}
+
 function getSession(sessionId) {
     return sessions.get(sessionId) || null;
 }
 
-// ─── HELPER FUNCTIONS ───────────────────────────────────────
-
-/**
- * Detect if the candidate's answer means "I don't know"
- */
+// ─── DETECT "I DON'T KNOW" ─────────────────────────────────
 function detectDontKnow(answer) {
     const normalized = answer.toLowerCase().trim().replace(/[^a-z\s]/g, '');
     const idkPhrases = [
@@ -260,25 +551,21 @@ function detectDontKnow(answer) {
         'i have no idea', 'no clue', 'cant answer',
         'skip', 'pass', 'dont remember', 'i forgot',
     ];
-    // Check if the entire answer is basically "I don't know"
     if (normalized.length < 30) {
         return idkPhrases.some(phrase => normalized.includes(phrase));
     }
     return false;
 }
 
-/**
- * Get the quality score from the most recent evaluation
- */
-function getLastEvalQuality(currentQ, followUpDepth) {
+function getLastEvalQuality(slot, followUpDepth) {
     if (followUpDepth > 0) {
-        const lastFu = currentQ.followUps[followUpDepth - 1];
+        const lastFu = slot.followUps[followUpDepth - 1];
         return lastFu?.evaluation?.answer_quality ?? 5;
     }
-    return currentQ.evaluation?.answer_quality ?? 5;
+    return slot.evaluation?.answer_quality ?? 5;
 }
 
-
+// ─── BUILD TRANSCRIPT ───────────────────────────────────────
 function buildTranscript(session) {
     return {
         id: session.id,
@@ -288,39 +575,79 @@ function buildTranscript(session) {
         endTime: session.endTime,
         state: session.state,
         duration: session.endTime ? session.endTime - session.startTime : null,
-        questions: session.questions.map((q, i) => ({
+        slots: session.slots.map((slot, i) => ({
             questionNumber: i + 1,
-            question: q.question,
-            answer: q.answer,
-            evaluation: q.evaluation,
-            followUps: q.followUps.map(fu => ({
+            type: slot.type,
+            question: slot.question || slot.problem,
+            answer: slot.answer,
+            evaluation: slot.evaluation,
+            // Spoken follow-ups
+            followUps: (slot.followUps || []).map(fu => ({
                 question: fu.question,
                 answer: fu.answer,
                 evaluation: fu.evaluation,
                 depth: fu.depth,
             })),
+            // MCQ data
+            options: slot.options,
+            correct: slot.correct,
+            selectedOption: slot.selectedOption,
+            mcqJustification: slot.mcqJustification,
+            mcqJustificationEval: slot.mcqJustificationEval,
+            // Coding data
+            code: slot.code,
+            explanation: slot.explanation,
+            codingEval: slot.codingEval,
+            exampleInput: slot.exampleInput,
+            exampleOutput: slot.exampleOutput,
+            interruptionResponses: slot.interruptionResponses,
+            behaviorData: slot.behaviorData,
         })),
     };
 }
 
 function buildSummary(session) {
     const transcript = buildTranscript(session);
-    const avgQuality = transcript.questions.reduce((sum, q) => {
-        let total = q.evaluation?.answer_quality || 0;
-        let count = 1;
-        q.followUps.forEach(fu => {
-            total += fu.evaluation?.answer_quality || 0;
-            count++;
+
+    let totalQuality = 0;
+    let qualityCount = 0;
+
+    transcript.slots.forEach(slot => {
+        if (slot.evaluation?.answer_quality != null) {
+            totalQuality += slot.evaluation.answer_quality;
+            qualityCount++;
+        }
+        (slot.followUps || []).forEach(fu => {
+            if (fu.evaluation?.answer_quality != null) {
+                totalQuality += fu.evaluation.answer_quality;
+                qualityCount++;
+            }
         });
-        return sum + total / count;
-    }, 0) / transcript.questions.length;
+        if (slot.mcqJustificationEval?.answer_quality != null) {
+            totalQuality += slot.mcqJustificationEval.answer_quality;
+            qualityCount++;
+        }
+        if (slot.codingEval?.code_quality != null) {
+            totalQuality += slot.codingEval.code_quality;
+            qualityCount++;
+        }
+    });
+
+    const avgQuality = qualityCount > 0 ? Math.round((totalQuality / qualityCount) * 10) / 10 : 0;
+    const duration = transcript.duration;
+    const spokenCount = transcript.slots.filter(s => s.type === 'spoken').length;
+    const mcqCount = transcript.slots.filter(s => s.type === 'mcq').length;
+    const codingCount = transcript.slots.filter(s => s.type === 'coding').length;
 
     return {
-        totalQuestions: transcript.questions.length,
-        averageQuality: Math.round(avgQuality * 10) / 10,
-        duration: transcript.duration,
-        durationFormatted: transcript.duration
-            ? `${Math.floor(transcript.duration / 60000)}m ${Math.floor((transcript.duration % 60000) / 1000)}s`
+        totalQuestions: transcript.slots.length,
+        spokenQuestions: spokenCount,
+        mcqQuestions: mcqCount,
+        codingQuestions: codingCount,
+        averageQuality: avgQuality,
+        duration,
+        durationFormatted: duration
+            ? `${Math.floor(duration / 60000)}m ${Math.floor((duration % 60000) / 1000)}s`
             : 'N/A',
     };
 }
@@ -331,10 +658,32 @@ function saveTranscript(session) {
     fs.writeFileSync(filePath, JSON.stringify(transcript, null, 2), 'utf-8');
 }
 
+
+// ─── SKIP QUESTION (DEV MODE) ───────────────────────────────
+async function skipQuestion(sessionId) {
+    const session = sessions.get(sessionId);
+    if (!session) throw new Error('Session not found');
+
+    // Mark current slot as skipped
+    const currentSlot = session.slots[session.slots.length - 1];
+    if (currentSlot) {
+        currentSlot.skipped = true;
+        currentSlot.answer = '[SKIPPED]';
+    }
+
+    return await advanceToNextSlot(session);
+}
+
 module.exports = {
     createSession,
     startInterview,
     submitAnswer,
+    submitMCQAnswer,
+    submitMCQJustification,
+    submitCode,
+    submitInterruptionResponse,
+    triggerCodingInterruption,
+    skipQuestion,
     getTranscript,
     getSession,
     STATES,

@@ -1,83 +1,62 @@
 // ============================================================
-// app.js — Landing Page Logic (Interview AI Platform v1)
+// app.js — Landing Page Logic (v2)
 // ============================================================
 
-(function () {
-    'use strict';
+const API = 'http://localhost:3000/api';
 
-    // ─── DOM ELEMENTS ───────────────────────────────────────
+document.addEventListener('DOMContentLoaded', () => {
     const nameInput = document.getElementById('candidateName');
-    const roleGrid = document.getElementById('roleGrid');
-    const roleCards = document.querySelectorAll('.role-card');
     const startBtn = document.getElementById('startBtn');
-    const errorMsg = document.getElementById('errorMsg');
+    const roleCards = document.querySelectorAll('.role-card');
 
     let selectedRole = null;
 
-    // ─── ROLE SELECTION ─────────────────────────────────────
+    // ─── ROLE SELECTION ─────────────────────────────
     roleCards.forEach(card => {
         card.addEventListener('click', () => {
             roleCards.forEach(c => c.classList.remove('selected'));
             card.classList.add('selected');
             selectedRole = card.dataset.role;
-            validateForm();
+            checkReady();
         });
     });
 
-    // ─── FORM VALIDATION ────────────────────────────────────
-    nameInput.addEventListener('input', validateForm);
+    // ─── ENABLE / DISABLE START ─────────────────────
+    nameInput.addEventListener('input', checkReady);
 
-    function validateForm() {
-        const name = nameInput.value.trim();
-        const isValid = name.length >= 2 && selectedRole;
-        startBtn.disabled = !isValid;
+    function checkReady() {
+        startBtn.disabled = !(nameInput.value.trim() && selectedRole);
     }
 
-    // ─── START INTERVIEW ────────────────────────────────────
+    // ─── START INTERVIEW ────────────────────────────
     startBtn.addEventListener('click', async () => {
         const candidateName = nameInput.value.trim();
         if (!candidateName || !selectedRole) return;
 
         startBtn.disabled = true;
-        startBtn.innerHTML = '<div class="spinner" style="width:16px;height:16px;border-width:2px;"></div> Starting...';
-        errorMsg.classList.add('hidden');
+        startBtn.textContent = '⏳ Starting...';
 
         try {
-            const response = await fetch('/api/interview/start', {
+            const res = await fetch(`${API}/interview/start`, {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify({ role: selectedRole, candidateName }),
             });
 
-            if (!response.ok) {
-                const err = await response.json();
-                throw new Error(err.error || 'Failed to start interview');
-            }
+            if (!res.ok) throw new Error('Failed to start');
 
-            const data = await response.json();
+            const data = await res.json();
 
-            // Store session data and navigate to interview page
-            sessionStorage.setItem('interviewSession', JSON.stringify({
-                sessionId: data.sessionId,
-                role: selectedRole,
-                candidateName,
-                firstQuestion: data,
-            }));
+            // Store first question for interview page
+            sessionStorage.setItem('firstQuestion', JSON.stringify(data));
 
-            window.location.href = '/interview.html';
+            // Navigate to interview
+            window.location.href = `/interview.html?session=${data.sessionId}&name=${encodeURIComponent(candidateName)}&role=${encodeURIComponent(selectedRole)}`;
         } catch (err) {
-            errorMsg.textContent = `Error: ${err.message}`;
-            errorMsg.classList.remove('hidden');
+            console.error('Error starting interview:', err);
+            alert('Could not start interview. Is the server running?');
             startBtn.disabled = false;
-            startBtn.innerHTML = '🚀 Start Interview';
+            startBtn.textContent = 'Start Interview →';
         }
     });
-
-    // ─── KEYBOARD SHORTCUT ──────────────────────────────────
-    nameInput.addEventListener('keydown', (e) => {
-        if (e.key === 'Enter' && !startBtn.disabled) {
-            startBtn.click();
-        }
-    });
-
-})();
+});

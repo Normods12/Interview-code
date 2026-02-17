@@ -1,8 +1,8 @@
 // ============================================================
-// ai.js — OpenRouter API Wrapper (Interview AI Platform v1)
+// ai.js — OpenRouter API Wrapper (Interview AI Platform v2)
 // ============================================================
 // All AI interactions go through this module.
-// Model can be swapped by changing OPENROUTER_MODEL in .env
+// V2: Added MCQ generation, coding questions, interruptions
 // ============================================================
 
 require('dotenv').config();
@@ -13,9 +13,6 @@ const API_URL = 'https://openrouter.ai/api/v1/chat/completions';
 
 /**
  * Send a chat completion request to OpenRouter
- * @param {Array} messages - Array of {role, content} objects
- * @param {Object} options - Optional overrides (temperature, max_tokens)
- * @returns {string} The assistant's response text
  */
 async function chatCompletion(messages, options = {}) {
     const body = {
@@ -45,7 +42,7 @@ async function chatCompletion(messages, options = {}) {
     return data.choices?.[0]?.message?.content || '';
 }
 
-// ─── INTERVIEW-SPECIFIC AI FUNCTIONS ────────────────────────
+// ─── SYSTEM PROMPT ──────────────────────────────────────────
 
 const SYSTEM_PROMPT = `You are a real human technical interviewer sitting across the table from a candidate.
 
@@ -75,17 +72,20 @@ BEHAVIOR:
 - Follow-ups based on candidate's own words
 - Interrupt naturally: "Why?", "What if...?", "But how?"`;
 
-/**
- * Generate an interview question based on role
- */
-async function generateQuestion(role, questionNumber, difficulty = 'easy') {
+// ─── SPOKEN QUESTION GENERATION ─────────────────────────────
+
+async function generateQuestion(role, questionNumber, difficulty = 'easy', previousTopics = []) {
+    const avoidTopics = previousTopics.length > 0
+        ? `\nDo NOT ask about these topics (already covered): ${previousTopics.join(', ')}`
+        : '';
+
     const messages = [
         { role: 'system', content: SYSTEM_PROMPT },
         {
             role: 'user',
             content: `Ask interview question #${questionNumber} for a ${role} fresher.
 Difficulty: ${difficulty}.
-${questionNumber === 1 ? 'Warm-up — something like "Tell me about yourself" or "What tech are you most comfortable with?"' : 'Ask about ONE core technical concept for this role.'}
+${questionNumber === 1 ? 'Warm-up — something like "Tell me about yourself" or "What tech are you most comfortable with?"' : 'Ask about ONE core technical concept for this role.'}${avoidTopics}
 
 RULES:
 - ONE sentence only, max 12-15 words
@@ -98,9 +98,8 @@ RULES:
     return (await chatCompletion(messages, { temperature: 0.8, max_tokens: 100 })).trim();
 }
 
-/**
- * Generate a follow-up based on candidate's answer
- */
+// ─── FOLLOW-UP GENERATION ───────────────────────────────────
+
 async function generateFollowUp(originalQuestion, candidateAnswer, followUpDepth = 1) {
     const probeStyle = followUpDepth === 1
         ? 'Pick ONE specific thing they said and ask about it. Keep it short — like "Why?" or "What do you mean by X?" or "What happens if Y?"'
@@ -121,12 +120,131 @@ Return ONLY the follow-up question, nothing else, no formatting.`
     return (await chatCompletion(messages, { temperature: 0.75, max_tokens: 80 })).trim();
 }
 
-/**
- * Evaluate a candidate's answer and return structured assessment
- * @param {string} question - The question that was asked
- * @param {string} answer - The candidate's answer
- * @returns {Object} Structured evaluation
- */
+// ─── MCQ GENERATION ─────────────────────────────────────────
+
+async function generateMCQ(role, difficulty = 'medium', previousTopics = []) {
+    const avoidTopics = previousTopics.length > 0
+        ? `\nDo NOT use these topics (already covered): ${previousTopics.join(', ')}`
+        : '';
+
+    const messages = [
+        { role: 'system', content: SYSTEM_PROMPT },
+        {
+            role: 'user',
+            content: `Generate a multiple choice question for a ${role} fresher interview.
+Difficulty: ${difficulty}.${avoidTopics}
+
+Return ONLY a valid JSON object (no markdown, no code fences):
+{
+  "question": "short question text, max 15 words",
+  "options": ["A) option1", "B) option2", "C) option3", "D) option4"],
+  "correct": "A",
+  "topic": "topic name"
+}`
+        }
+    ];
+
+    const raw = await chatCompletion(messages, { temperature: 0.7, max_tokens: 300 });
+    try {
+        const jsonMatch = raw.match(/\{[\s\S]*\}/);
+        if (jsonMatch) {
+            const parsed = JSON.parse(jsonMatch[0]);
+            if (parsed.question && Array.isArray(parsed.options) && parsed.options.length >= 2) {
+                return parsed;
+            }
+            console.warn('[AI] MCQ parsed but missing options, using fallback');
+        }
+    } catch (e) {
+        console.warn('[AI] MCQ JSON parse failed, using fallback:', e.message);
+    }
+
+    return {
+        question: 'Which keyword is used to prevent method overriding in Java?',
+        options: ['A) static', 'B) final', 'C) abstract', 'D) volatile'],
+        correct: 'B',
+        topic: 'Java basics',
+    };
+}
+
+async function generateMCQFollowUp(mcqQuestion, selectedOption, correctOption) {
+    const isCorrect = selectedOption === correctOption;
+    const messages = [
+        { role: 'system', content: SYSTEM_PROMPT },
+        {
+            role: 'user',
+            content: `Candidate was asked: "${mcqQuestion}"
+They chose: ${selectedOption}${isCorrect ? ' (correct)' : ` (wrong, correct was ${correctOption})`}
+
+Ask a SHORT follow-up: "Why did you pick that?" or "Why not the other options?"
+ONE sentence only. Return ONLY the question.`
+        }
+    ];
+
+    return (await chatCompletion(messages, { temperature: 0.7, max_tokens: 60 })).trim();
+}
+
+// ─── CODING QUESTION GENERATION ─────────────────────────────
+
+async function generateCodingQuestion(role, difficulty = 'easy') {
+    const messages = [
+        { role: 'system', content: SYSTEM_PROMPT },
+        {
+            role: 'user',
+            content: `Generate a simple coding question for a ${role} fresher.
+Difficulty: ${difficulty}.
+
+Rules:
+- Simple logic-based problem (NOT trick questions)
+- Solvable in 10-15 lines of code
+- JavaScript language
+
+Return ONLY a valid JSON object (no markdown, no code fences):
+{
+  "problem": "short problem description, 1-2 sentences max",
+  "example_input": "sample input",
+  "example_output": "expected output",
+  "topic": "topic name"
+}`
+        }
+    ];
+
+    const raw = await chatCompletion(messages, { temperature: 0.7, max_tokens: 300 });
+    try {
+        const jsonMatch = raw.match(/\{[\s\S]*\}/);
+        if (jsonMatch) return JSON.parse(jsonMatch[0]);
+    } catch (e) { }
+
+    return {
+        problem: 'Write a function that checks if a number is prime.',
+        example_input: '7',
+        example_output: 'true',
+        topic: 'logic',
+    };
+}
+
+async function generateCodingInterruption(code, problem) {
+    const messages = [
+        { role: 'system', content: SYSTEM_PROMPT },
+        {
+            role: 'user',
+            content: `Candidate is solving: "${problem}"
+Their code so far:
+${code}
+
+Ask ONE short interruption question about their approach. Examples:
+- "Why this approach?"
+- "What's the time complexity?"
+- "What if the input is negative?"
+
+ONE sentence only. Return ONLY the question.`
+        }
+    ];
+
+    return (await chatCompletion(messages, { temperature: 0.7, max_tokens: 60 })).trim();
+}
+
+// ─── ANSWER EVALUATION ─────────────────────────────────────
+
 async function evaluateAnswer(question, answer) {
     const messages = [
         { role: 'system', content: SYSTEM_PROMPT },
@@ -137,28 +255,22 @@ async function evaluateAnswer(question, answer) {
 Question: "${question}"
 Answer: "${answer}"
 
-Return ONLY a valid JSON object (no markdown, no code fences) with these fields:
+Return ONLY a valid JSON object (no markdown, no code fences):
 {
   "answer_quality": <number 1-10>,
-  "concept_coverage": [<list of concepts mentioned>],
-  "confidence": <number 0.0-1.0>,
+  "concept_coverage": [<concepts mentioned>],
+  "confidence": <0.0-1.0>,
   "clarity": <"low" | "medium" | "high">,
-  "brief_feedback": "<one sentence feedback>"
+  "brief_feedback": "<one sentence>"
 }`
         }
     ];
 
     const raw = await chatCompletion(messages, { temperature: 0.3 });
-
     try {
-        // Try to extract JSON from the response
         const jsonMatch = raw.match(/\{[\s\S]*\}/);
-        if (jsonMatch) {
-            return JSON.parse(jsonMatch[0]);
-        }
-    } catch (e) {
-        // Fallback if parsing fails
-    }
+        if (jsonMatch) return JSON.parse(jsonMatch[0]);
+    } catch (e) { }
 
     return {
         answer_quality: 5,
@@ -169,9 +281,49 @@ Return ONLY a valid JSON object (no markdown, no code fences) with these fields:
     };
 }
 
+async function evaluateCodingAnswer(problem, code, explanation) {
+    const messages = [
+        { role: 'system', content: SYSTEM_PROMPT },
+        {
+            role: 'user',
+            content: `Evaluate this coding submission.
+
+Problem: "${problem}"
+Code: ${code}
+Explanation: "${explanation || 'none provided'}"
+
+Return ONLY a valid JSON object (no markdown, no code fences):
+{
+  "logic_understanding": <"low" | "medium" | "high">,
+  "explanation_alignment": <0.0-1.0>,
+  "code_quality": <number 1-10>,
+  "brief_feedback": "<one sentence>"
+}`
+        }
+    ];
+
+    const raw = await chatCompletion(messages, { temperature: 0.3 });
+    try {
+        const jsonMatch = raw.match(/\{[\s\S]*\}/);
+        if (jsonMatch) return JSON.parse(jsonMatch[0]);
+    } catch (e) { }
+
+    return {
+        logic_understanding: 'medium',
+        explanation_alignment: 0.5,
+        code_quality: 5,
+        brief_feedback: 'Could not parse AI evaluation.',
+    };
+}
+
 module.exports = {
     chatCompletion,
     generateQuestion,
     generateFollowUp,
+    generateMCQ,
+    generateMCQFollowUp,
+    generateCodingQuestion,
+    generateCodingInterruption,
     evaluateAnswer,
+    evaluateCodingAnswer,
 };

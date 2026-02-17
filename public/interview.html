@@ -1,14 +1,17 @@
 <!DOCTYPE html>
 <html lang="en">
+
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <meta name="description" content="Live interview session — Interview AI Platform">
+    <meta name="description" content="Live interview session — Interview AI Platform v2">
     <title>Interview — Live Session</title>
     <link rel="stylesheet" href="/css/style.css">
 </head>
+
 <body>
-    <div style="max-width: 850px; margin: 0 auto; padding: var(--space-xl) var(--space-lg); min-height: 100vh; position: relative; z-index: 1;">
+    <div
+        style="max-width: 850px; margin: 0 auto; padding: var(--space-xl) var(--space-lg); min-height: 100vh; position: relative; z-index: 1;">
 
         <!-- ─── HEADER ───────────────────────────────── -->
         <div class="interview-header" id="interviewHeader">
@@ -25,9 +28,27 @@
                     <div class="progress-bar">
                         <div class="progress-fill" id="progressFill" style="width: 0%"></div>
                     </div>
-                    <span class="progress-text" id="progressText">0/0</span>
+                    <span class="progress-text" id="progressText">0/10</span>
                 </div>
             </div>
+        </div>
+
+        <!-- ─── SPEECH TOGGLE ────────────────────────── -->
+        <div style="display: flex; align-items: center; gap: var(--space-sm); margin-bottom: var(--space-md);">
+            <button id="speechToggle" class="btn btn-secondary" style="padding: 6px 12px; font-size: 0.8rem;"
+                title="Toggle voice">
+                🔊 Voice On
+            </button>
+            <button id="micToggle" class="btn btn-secondary" style="padding: 6px 12px; font-size: 0.8rem;"
+                title="Toggle microphone input">
+                🎤 Mic Off
+            </button>
+            <button id="skipBtn" class="btn btn-secondary"
+                style="padding: 6px 12px; font-size: 0.8rem; margin-left: auto; background: rgba(255, 107, 107, 0.1); border-color: rgba(255, 107, 107, 0.3); color: var(--danger);"
+                title="Skip this question (dev mode)">
+                ⏭️ Skip
+            </button>
+            <span style="font-size: 0.7rem; color: var(--text-muted);" id="speechStatus"></span>
         </div>
 
         <!-- ─── LOADING STATE ────────────────────────── -->
@@ -38,8 +59,8 @@
             </div>
         </div>
 
-        <!-- ─── QUESTION AREA ────────────────────────── -->
-        <div id="questionArea" class="hidden">
+        <!-- ─── SPOKEN QUESTION AREA ─────────────────── -->
+        <div id="spokenArea" class="hidden">
             <div class="question-card" id="questionCard">
                 <div class="question-badge" id="questionBadge">
                     <span>Question 1</span>
@@ -47,7 +68,6 @@
                 <p class="question-text" id="questionText"></p>
             </div>
 
-            <!-- AI thinking indicator -->
             <div id="aiThinking" class="hidden" style="margin-bottom: var(--space-lg);">
                 <div class="loading-spinner">
                     <div class="spinner"></div>
@@ -55,19 +75,126 @@
                 </div>
             </div>
 
-            <!-- Answer input -->
             <div class="answer-section" id="answerSection">
                 <div class="form-group">
                     <label class="form-label">Your Answer</label>
-                    <textarea id="answerInput" class="form-textarea" placeholder="Type your answer here..." rows="5"></textarea>
+                    <textarea id="answerInput" class="form-textarea"
+                        placeholder="Type your answer or click 🎤 to speak..." rows="5"></textarea>
                 </div>
                 <div class="answer-actions">
                     <div class="timer" style="margin-right: auto;">
-                        <span style="font-size: 0.8rem; color: var(--text-muted);" id="answerTimer">Thinking time: 0s</span>
+                        <span style="font-size: 0.8rem; color: var(--text-muted);" id="answerTimer">Thinking time:
+                            0s</span>
                     </div>
                     <button id="submitBtn" class="btn btn-primary" disabled>
                         Submit Answer →
                     </button>
+                </div>
+            </div>
+        </div>
+
+        <!-- ─── MCQ AREA ─────────────────────────────── -->
+        <div id="mcqArea" class="hidden">
+            <div class="question-card">
+                <div class="question-badge" style="background: rgba(253, 203, 110, 0.12); color: var(--warning);">
+                    <span>📋 Multiple Choice</span>
+                </div>
+                <p class="question-text" id="mcqQuestionText"></p>
+            </div>
+
+            <div id="mcqOptions" class="mt-md" style="display: flex; flex-direction: column; gap: var(--space-sm);">
+            </div>
+
+            <div class="answer-actions mt-lg">
+                <div class="timer" style="margin-right: auto;">
+                    <span style="font-size: 0.8rem; color: var(--text-muted);" id="mcqTimer">Time: 0s</span>
+                </div>
+                <button id="mcqSubmitBtn" class="btn btn-primary" disabled>
+                    Submit Choice →
+                </button>
+            </div>
+        </div>
+
+        <!-- ─── MCQ JUSTIFY AREA ─────────────────────── -->
+        <div id="mcqJustifyArea" class="hidden">
+            <div class="question-card">
+                <div class="question-badge follow-up">
+                    <span>↳ MCQ Follow-up</span>
+                </div>
+                <p class="question-text" id="mcqJustifyQuestion"></p>
+                <div id="mcqResultBadge" class="mt-md" style="font-size: 0.85rem;"></div>
+            </div>
+
+            <div class="answer-section mt-md">
+                <div class="form-group">
+                    <label class="form-label">Your Justification</label>
+                    <textarea id="mcqJustifyInput" class="form-textarea" placeholder="Explain your reasoning..."
+                        rows="3"></textarea>
+                </div>
+                <div class="answer-actions">
+                    <button id="mcqJustifySubmitBtn" class="btn btn-primary" disabled>
+                        Submit →
+                    </button>
+                </div>
+            </div>
+        </div>
+
+        <!-- ─── CODING AREA ──────────────────────────── -->
+        <div id="codingArea" class="hidden">
+            <div class="question-card">
+                <div class="question-badge"
+                    style="background: rgba(108, 92, 231, 0.12); color: var(--accent-secondary);">
+                    <span>💻 Coding Question</span>
+                </div>
+                <p class="question-text" id="codingProblem"></p>
+                <div class="mt-md" style="font-size: 0.85rem; color: var(--text-muted);">
+                    <span>Example: </span>
+                    <code id="codingInput" style="color: var(--success);"></code>
+                    <span> → </span>
+                    <code id="codingOutput" style="color: var(--accent-secondary);"></code>
+                </div>
+            </div>
+
+            <div class="form-group mt-lg">
+                <label class="form-label">Your Code (JavaScript)</label>
+                <textarea id="codeEditor" class="form-textarea"
+                    style="font-family: var(--font-mono); font-size: 0.9rem; min-height: 200px; tab-size: 2;"
+                    placeholder="function solution() {&#10;  // Write your code here&#10;}"
+                    spellcheck="false"></textarea>
+                <div id="pasteWarning" class="hidden"
+                    style="color: var(--warning); font-size: 0.8rem; margin-top: 4px;">⚠️ Paste detected — this will be
+                    logged</div>
+            </div>
+
+            <div class="form-group mt-md">
+                <label class="form-label">Explain your approach</label>
+                <textarea id="codeExplanation" class="form-textarea" placeholder="Why did you choose this approach?"
+                    rows="2"></textarea>
+            </div>
+
+            <div class="answer-actions mt-md">
+                <div style="font-size: 0.8rem; color: var(--text-muted); margin-right: auto;" id="codingTimer">Time: 0s
+                </div>
+                <button id="codeSubmitBtn" class="btn btn-primary" disabled>
+                    Submit Code →
+                </button>
+            </div>
+        </div>
+
+        <!-- ─── CODING INTERRUPT MODAL ───────────────── -->
+        <div id="interruptModal" class="hidden"
+            style="position: fixed; inset: 0; background: rgba(0,0,0,0.7); z-index: 100; display: flex; align-items: center; justify-content: center; backdrop-filter: blur(4px);">
+            <div class="glass-card" style="max-width: 500px; width: 90%; animation: slideIn 0.3s ease;">
+                <div class="question-badge follow-up">
+                    <span>🛑 Interruption</span>
+                </div>
+                <p class="question-text mt-md" id="interruptQuestion"></p>
+                <div class="form-group mt-lg">
+                    <textarea id="interruptInput" class="form-textarea" placeholder="Answer the interviewer..."
+                        rows="2"></textarea>
+                </div>
+                <div class="answer-actions mt-md">
+                    <button id="interruptSubmitBtn" class="btn btn-primary" disabled>Answer & Resume Coding</button>
                 </div>
             </div>
         </div>
@@ -80,10 +207,8 @@
                 <p class="subtitle mt-md" id="completionMessage">Great job. Here's your session summary.</p>
             </div>
 
-            <!-- Summary stats -->
             <div class="summary-grid mt-xl" id="summaryStats"></div>
 
-            <!-- Transcript -->
             <div class="mt-xl">
                 <h3 style="margin-bottom: var(--space-lg);">📝 Full Transcript</h3>
                 <div id="transcriptList"></div>
@@ -98,4 +223,5 @@
 
     <script src="/js/interview.js"></script>
 </body>
+
 </html>
