@@ -7,218 +7,348 @@
     <meta name="description" content="Live interview session — Interview AI Platform v2">
     <title>Interview — Live Session</title>
     <link rel="stylesheet" href="/css/style.css">
+    <link rel="stylesheet" href="/css/video-layout.css">
 </head>
 
 <body>
-    <div
-        style="max-width: 850px; margin: 0 auto; padding: var(--space-xl) var(--space-lg); min-height: 100vh; position: relative; z-index: 1;">
+    <!-- ─── LOBBY SCREEN (Pre-check) ───────────────────────────── -->
+    <div id="lobbyScreen" class="lobby-overlay">
+        <div class="lobby-card">
+            <h1>Ready for your interview?</h1>
+            <p>Please grant camera and microphone access to begin.</p>
 
-        <!-- ─── HEADER ───────────────────────────────── -->
-        <div class="interview-header" id="interviewHeader">
-            <div>
-                <h2 style="font-size: 1.2rem;" id="headerTitle">Interview Session</h2>
-                <p style="font-size: 0.8rem; color: var(--text-muted);" id="headerRole">Loading...</p>
-            </div>
-            <div style="display: flex; align-items: center; gap: var(--space-lg);">
-                <div class="timer" id="timer">
-                    <div class="timer-dot"></div>
-                    <span id="timerText">00:00</span>
+            <div class="check-list">
+                <div class="check-item" id="checkCam">
+                    <span class="icon">📷</span> Camera Access <span class="status">Waiting...</span>
                 </div>
-                <div class="interview-progress">
-                    <div class="progress-bar">
-                        <div class="progress-fill" id="progressFill" style="width: 0%"></div>
+                <div class="check-item" id="checkMic">
+                    <span class="icon">🎤</span> Microphone Access <span class="status">Waiting...</span>
+                </div>
+            </div>
+
+            <div id="lobbyVideoPreview" class="lobby-preview">
+                <!-- Preview will be mirrored here via JS or just verify main video works -->
+            </div>
+
+            <button id="startInterviewBtn" class="btn btn-primary btn-lg" disabled>Start Interview</button>
+        </div>
+    </div>
+
+    <!-- ─── VIDEO STAGE (Zoom Style) ───────────────────────────── -->
+    <div id="videoStage">
+
+        <!-- Speech Feedback Bubble (V3.5 Polish) -->
+        <div id="speechFeedback" class="speech-feedback hidden">
+            <div class="feedback-icon">🎙️</div>
+            <div class="feedback-text" id="feedbackText">Listening...</div>
+        </div>
+
+        <!-- Spoken Question Overlay (Zoom Style) -->
+        <div id="spokenOverlay" class="spoken-overlay hidden">
+            <div class="question-caption-container">
+                <div class="question-caption" id="spokenCaptionText">Preparing question...</div>
+            </div>
+
+            <div class="spoken-controls">
+                <div class="spoken-timer" id="spokenTimer">00:00</div>
+                <button id="finishSpeakingBtn" class="btn-finish-speaking">✓ I'm Done Speaking</button>
+            </div>
+        </div>
+
+        <!-- Main Video Area (Interviewer) -->
+        <div class="video-main">
+            <div class="interviewer-container">
+                <!-- V3.5 Avatar -->
+                <img id="interviewerImage" src="/img/interviewer.png" alt="Interviewer Christopher">
+            </div>
+        </div>
+
+
+
+        <!-- Control Bar (Bottom Fixed) -->
+        <div class="video-controls">
+            <button class="control-btn" id="micBtn" title="Toggle Microphone">
+                <!-- Icon ON -->
+                <svg viewBox="0 0 24 24" class="icon-svg icon-on" fill="none" stroke="currentColor" stroke-width="2"
+                    stroke-linecap="round" stroke-linejoin="round">
+                    <path d="M12 1a3 3 0 0 0-3 3v7a3 3 0 0 0 6 0V4a3 3 0 0 0-3-3z" />
+                    <path d="M19 10v1a7 7 0 0 1-14 0v-1" />
+                    <line x1="12" y1="19" x2="12" y2="23" />
+                    <line x1="8" y1="23" x2="16" y2="23" />
+                </svg>
+                <!-- Icon OFF: Same mic + bold slash -->
+                <svg viewBox="0 0 24 24" class="icon-svg icon-off" fill="none" stroke="currentColor" stroke-width="2"
+                    stroke-linecap="round" stroke-linejoin="round">
+                    <path d="M12 1a3 3 0 0 0-3 3v7a3 3 0 0 0 6 0V4a3 3 0 0 0-3-3z" opacity="0.5" />
+                    <path d="M19 10v1a7 7 0 0 1-14 0v-1" opacity="0.5" />
+                    <line x1="12" y1="19" x2="12" y2="23" opacity="0.5" />
+                    <line x1="8" y1="23" x2="16" y2="23" opacity="0.5" />
+                    <line x1="2" y1="2" x2="22" y2="22" stroke-width="3" />
+                </svg>
+            </button>
+
+            <button class="control-btn" id="camBtn" title="Toggle Camera">
+                <!-- Icon ON -->
+                <svg viewBox="0 0 24 24" class="icon-svg icon-on" fill="none" stroke="currentColor" stroke-width="2"
+                    stroke-linecap="round" stroke-linejoin="round">
+                    <polygon points="23 7 16 12 23 17 23 7" />
+                    <rect x="1" y="5" width="15" height="14" rx="2" ry="2" />
+                </svg>
+                <!-- Icon OFF: Same camera + bold slash -->
+                <svg viewBox="0 0 24 24" class="icon-svg icon-off" fill="none" stroke="currentColor" stroke-width="2"
+                    stroke-linecap="round" stroke-linejoin="round">
+                    <polygon points="23 7 16 12 23 17 23 7" opacity="0.5" />
+                    <rect x="1" y="5" width="15" height="14" rx="2" ry="2" opacity="0.5" />
+                    <line x1="2" y1="2" x2="22" y2="22" stroke-width="3" />
+                </svg>
+            </button>
+
+            <button class="control-btn danger-btn" id="hangupBtn" title="End Interview"
+                onclick="window.location.href='/'">
+                <!-- Hangup Icon (X / Close) -->
+                <svg viewBox="0 0 24 24" class="icon-svg" fill="none" stroke="currentColor" stroke-width="2.5"
+                    stroke-linecap="round" stroke-linejoin="round">
+                    <line x1="18" y1="6" x2="6" y2="18" />
+                    <line x1="6" y1="6" x2="18" y2="18" />
+                </svg>
+            </button>
+
+            <div class="status-badge" id="recordingStatus">
+                <div class="rec-dot"></div>
+                REC
+            </div>
+        </div>
+
+
+    </div>
+
+    <div id="userVideoContainer">
+        <video id="userVideo" autoplay muted playsinline></video>
+        <div
+            style="position: absolute; bottom: 10px; left: 10px; font-size: 0.8rem; color: #fff; background: rgba(0,0,0,0.5); padding: 2px 6px; border-radius: 4px;">
+            You</div>
+    </div>
+
+    <!-- Floating Debug Controls (Moved out for global access) -->
+    <div class="floating-debug">
+        <span id="debugQNum" class="debug-q-badge">Q ?/?</span>
+        <button id="floatingSkipBtn" class="floating-skip-btn" title="Skip Question (Debug)">⏭️ Skip</button>
+    </div>
+
+    <!-- ─── CONTENT STAGE (Slides/Tasks) ───────────────────────── -->
+    <div id="contentStage" class="content-stage">
+        <div style="max-width: 850px; margin: 0 auto; padding-bottom: 100px;">
+
+            <!-- ─── HEADER ───────────────────────────────── -->
+            <div class="interview-header" id="interviewHeader">
+                <div>
+                    <h2 style="font-size: 1.4rem; letter-spacing: -0.5px;" id="headerTitle">
+                        <span style="color:var(--primary)">⚡</span> TalentScout
+                    </h2>
+                    <p style="font-size: 0.8rem; color: var(--text-muted); margin-top: 2px;" id="headerRole">AI
+                        Technical Interview</p>
+                </div>
+                <div style="display: flex; align-items: center; gap: var(--space-lg);">
+                    <div class="timer" id="timer">
+                        <div class="timer-dot"></div>
+                        <span id="timerText">00:00</span>
                     </div>
-                    <span class="progress-text" id="progressText">0/10</span>
+                    <div class="interview-progress">
+                        <div class="progress-bar">
+                            <div class="progress-fill" id="progressFill" style="width: 0%"></div>
+                        </div>
+                        <span class="progress-text" id="progressText">0/10</span>
+                    </div>
                 </div>
             </div>
-        </div>
 
-        <!-- ─── SPEECH TOGGLE ────────────────────────── -->
-        <div style="display: flex; align-items: center; gap: var(--space-sm); margin-bottom: var(--space-md);">
-            <button id="speechToggle" class="btn btn-secondary" style="padding: 6px 12px; font-size: 0.8rem;"
-                title="Toggle voice">
-                🔊 Voice On
-            </button>
-            <button id="micToggle" class="btn btn-secondary" style="padding: 6px 12px; font-size: 0.8rem;"
-                title="Toggle microphone input">
-                🎤 Mic Off
-            </button>
-            <button id="skipBtn" class="btn btn-secondary"
-                style="padding: 6px 12px; font-size: 0.8rem; margin-left: auto; background: rgba(255, 107, 107, 0.1); border-color: rgba(255, 107, 107, 0.3); color: var(--danger);"
-                title="Skip this question (dev mode)">
-                ⏭️ Skip
-            </button>
-            <span style="font-size: 0.7rem; color: var(--text-muted);" id="speechStatus"></span>
-        </div>
-
-        <!-- ─── LOADING STATE ────────────────────────── -->
-        <div id="loadingState" class="text-center" style="padding: var(--space-3xl) 0;">
-            <div class="loading-spinner">
-                <div class="spinner"></div>
-                <span>Preparing your interview...</span>
-            </div>
-        </div>
-
-        <!-- ─── SPOKEN QUESTION AREA ─────────────────── -->
-        <div id="spokenArea" class="hidden">
-            <div class="question-card" id="questionCard">
-                <div class="question-badge" id="questionBadge">
-                    <span>Question 1</span>
-                </div>
-                <p class="question-text" id="questionText"></p>
+            <!-- ─── SPEECH TOGGLE (Hidden in V3.5, controlled by bar) -->
+            <div style="display: none; align-items: center; gap: var(--space-sm); margin-bottom: var(--space-md);">
+                <button id="speechToggle">Voice On</button>
+                <button id="micToggle">Mic Off</button>
+                <span id="speechStatus"></span>
             </div>
 
-            <div id="aiThinking" class="hidden" style="margin-bottom: var(--space-lg);">
+            <!-- Dev Skip Button (Moved here) -->
+            <div style="text-align: right; margin-bottom: var(--space-sm);">
+                <button id="skipBtn" class="btn btn-secondary"
+                    style="padding: 6px 12px; font-size: 0.8rem; background: rgba(255, 107, 107, 0.1); border-color: rgba(255, 107, 107, 0.3); color: var(--danger);"
+                    title="Skip this question">
+                    ⏭️ Skip
+                </button>
+            </div>
+
+            <!-- ─── LOADING STATE ────────────────────────── -->
+            <div id="loadingState" class="text-center" style="padding: var(--space-3xl) 0;">
                 <div class="loading-spinner">
                     <div class="spinner"></div>
-                    <span id="aiThinkingText">Interviewer is thinking...</span>
+                    <span>Connecting to Interviewer...</span>
                 </div>
             </div>
 
-            <div class="answer-section" id="answerSection">
-                <div class="form-group">
-                    <label class="form-label">Your Answer</label>
-                    <textarea id="answerInput" class="form-textarea"
-                        placeholder="Type your answer or click 🎤 to speak..." rows="5"></textarea>
-                </div>
-                <div class="answer-actions">
-                    <div class="timer" style="margin-right: auto;">
-                        <span style="font-size: 0.8rem; color: var(--text-muted);" id="answerTimer">Thinking time:
-                            0s</span>
+            <!-- ─── SPOKEN QUESTION AREA ─────────────────── -->
+            <div id="spokenArea" class="hidden">
+                <div class="question-card" id="questionCard">
+                    <div class="question-badge" id="questionBadge">
+                        <span>Question 1</span>
                     </div>
-                    <button id="submitBtn" class="btn btn-primary" disabled>
-                        Submit Answer →
+                    <p class="question-text" id="questionText"></p>
+                </div>
+
+                <div id="aiThinking" class="hidden" style="margin-bottom: var(--space-lg);">
+                    <div class="loading-spinner">
+                        <div class="spinner"></div>
+                        <span id="aiThinkingText">Interviewer is thinking...</span>
+                    </div>
+                </div>
+
+                <div class="answer-section" id="answerSection">
+                    <div class="form-group">
+                        <label class="form-label">Your Answer</label>
+                        <textarea id="answerInput" class="form-textarea"
+                            placeholder="Type your answer or click 🎤 to speak..." rows="5"></textarea>
+                    </div>
+                    <div class="answer-actions">
+                        <div class="timer" style="margin-right: auto;">
+                            <span style="font-size: 0.8rem; color: var(--text-muted);" id="answerTimer">Thinking time:
+                                0s</span>
+                        </div>
+                        <button id="submitBtn" class="btn btn-primary" disabled>
+                            Submit Answer →
+                        </button>
+                    </div>
+                </div>
+            </div>
+
+            <!-- ─── MCQ AREA ─────────────────────────────── -->
+            <div id="mcqArea" class="hidden">
+                <div class="question-card">
+                    <div class="question-badge" style="background: rgba(253, 203, 110, 0.12); color: var(--warning);">
+                        <span>📋 Multiple Choice</span>
+                    </div>
+                    <p class="question-text" id="mcqQuestionText"></p>
+                </div>
+
+                <div id="mcqOptions" class="mt-md" style="display: flex; flex-direction: column; gap: var(--space-sm);">
+                </div>
+
+                <div class="answer-actions mt-lg">
+                    <div class="timer" style="margin-right: auto;">
+                        <span style="font-size: 0.8rem; color: var(--text-muted);" id="mcqTimer">Time: 0s</span>
+                    </div>
+                    <button id="mcqSubmitBtn" class="btn btn-primary" disabled>
+                        Submit Choice →
                     </button>
                 </div>
             </div>
-        </div>
 
-        <!-- ─── MCQ AREA ─────────────────────────────── -->
-        <div id="mcqArea" class="hidden">
-            <div class="question-card">
-                <div class="question-badge" style="background: rgba(253, 203, 110, 0.12); color: var(--warning);">
-                    <span>📋 Multiple Choice</span>
+            <!-- ─── MCQ JUSTIFY AREA ─────────────────────── -->
+            <div id="mcqJustifyArea" class="hidden">
+                <div class="question-card">
+                    <div class="question-badge follow-up">
+                        <span>↳ MCQ Follow-up</span>
+                    </div>
+                    <p class="question-text" id="mcqJustifyQuestion"></p>
+                    <div id="mcqResultBadge" class="mt-md" style="font-size: 0.85rem;"></div>
                 </div>
-                <p class="question-text" id="mcqQuestionText"></p>
-            </div>
 
-            <div id="mcqOptions" class="mt-md" style="display: flex; flex-direction: column; gap: var(--space-sm);">
-            </div>
-
-            <div class="answer-actions mt-lg">
-                <div class="timer" style="margin-right: auto;">
-                    <span style="font-size: 0.8rem; color: var(--text-muted);" id="mcqTimer">Time: 0s</span>
-                </div>
-                <button id="mcqSubmitBtn" class="btn btn-primary" disabled>
-                    Submit Choice →
-                </button>
-            </div>
-        </div>
-
-        <!-- ─── MCQ JUSTIFY AREA ─────────────────────── -->
-        <div id="mcqJustifyArea" class="hidden">
-            <div class="question-card">
-                <div class="question-badge follow-up">
-                    <span>↳ MCQ Follow-up</span>
-                </div>
-                <p class="question-text" id="mcqJustifyQuestion"></p>
-                <div id="mcqResultBadge" class="mt-md" style="font-size: 0.85rem;"></div>
-            </div>
-
-            <div class="answer-section mt-md">
-                <div class="form-group">
-                    <label class="form-label">Your Justification</label>
-                    <textarea id="mcqJustifyInput" class="form-textarea" placeholder="Explain your reasoning..."
-                        rows="3"></textarea>
-                </div>
-                <div class="answer-actions">
-                    <button id="mcqJustifySubmitBtn" class="btn btn-primary" disabled>
-                        Submit →
-                    </button>
-                </div>
-            </div>
-        </div>
-
-        <!-- ─── CODING AREA ──────────────────────────── -->
-        <div id="codingArea" class="hidden">
-            <div class="question-card">
-                <div class="question-badge"
-                    style="background: rgba(108, 92, 231, 0.12); color: var(--accent-secondary);">
-                    <span>💻 Coding Question</span>
-                </div>
-                <p class="question-text" id="codingProblem"></p>
-                <div class="mt-md" style="font-size: 0.85rem; color: var(--text-muted);">
-                    <span>Example: </span>
-                    <code id="codingInput" style="color: var(--success);"></code>
-                    <span> → </span>
-                    <code id="codingOutput" style="color: var(--accent-secondary);"></code>
+                <div class="answer-section mt-md">
+                    <div class="form-group">
+                        <label class="form-label">Your Justification</label>
+                        <textarea id="mcqJustifyInput" class="form-textarea" placeholder="Explain your reasoning..."
+                            rows="3"></textarea>
+                    </div>
+                    <div class="answer-actions">
+                        <button id="mcqJustifySubmitBtn" class="btn btn-primary" disabled>
+                            Submit →
+                        </button>
+                    </div>
                 </div>
             </div>
 
-            <div class="form-group mt-lg">
-                <label class="form-label">Your Code (JavaScript)</label>
-                <textarea id="codeEditor" class="form-textarea"
-                    style="font-family: var(--font-mono); font-size: 0.9rem; min-height: 200px; tab-size: 2;"
-                    placeholder="function solution() {&#10;  // Write your code here&#10;}"
-                    spellcheck="false"></textarea>
-                <div id="pasteWarning" class="hidden"
-                    style="color: var(--warning); font-size: 0.8rem; margin-top: 4px;">⚠️ Paste detected — this will be
-                    logged</div>
-            </div>
-
-            <div class="form-group mt-md">
-                <label class="form-label">Explain your approach</label>
-                <textarea id="codeExplanation" class="form-textarea" placeholder="Why did you choose this approach?"
-                    rows="2"></textarea>
-            </div>
-
-            <div class="answer-actions mt-md">
-                <div style="font-size: 0.8rem; color: var(--text-muted); margin-right: auto;" id="codingTimer">Time: 0s
+            <!-- ─── CODING AREA ──────────────────────────── -->
+            <div id="codingArea" class="hidden">
+                <div class="question-card">
+                    <div class="question-badge"
+                        style="background: rgba(108, 92, 231, 0.12); color: var(--accent-secondary);">
+                        <span>💻 Coding Question</span>
+                    </div>
+                    <p class="question-text" id="codingProblem"></p>
+                    <div class="mt-md" style="font-size: 0.85rem; color: var(--text-muted);">
+                        <span>Example: </span>
+                        <code id="codingInput" style="color: var(--success);"></code>
+                        <span> → </span>
+                        <code id="codingOutput" style="color: var(--accent-secondary);"></code>
+                    </div>
                 </div>
-                <button id="codeSubmitBtn" class="btn btn-primary" disabled>
-                    Submit Code →
-                </button>
-            </div>
-        </div>
 
-        <!-- ─── CODING INTERRUPT MODAL ───────────────── -->
-        <div id="interruptModal" class="hidden"
-            style="position: fixed; inset: 0; background: rgba(0,0,0,0.7); z-index: 100; display: flex; align-items: center; justify-content: center; backdrop-filter: blur(4px);">
-            <div class="glass-card" style="max-width: 500px; width: 90%; animation: slideIn 0.3s ease;">
-                <div class="question-badge follow-up">
-                    <span>🛑 Interruption</span>
-                </div>
-                <p class="question-text mt-md" id="interruptQuestion"></p>
                 <div class="form-group mt-lg">
-                    <textarea id="interruptInput" class="form-textarea" placeholder="Answer the interviewer..."
+                    <label class="form-label">Your Code (JavaScript)</label>
+                    <textarea id="codeEditor" class="form-textarea"
+                        style="font-family: var(--font-mono); font-size: 0.9rem; min-height: 200px; tab-size: 2;"
+                        placeholder="function solution() {&#10;  // Write your code here&#10;}"
+                        spellcheck="false"></textarea>
+                    <div id="pasteWarning" class="hidden"
+                        style="color: var(--warning); font-size: 0.8rem; margin-top: 4px;">⚠️ Paste detected — this will
+                        be
+                        logged</div>
+                </div>
+
+                <div class="form-group mt-md">
+                    <label class="form-label">Explain your approach</label>
+                    <textarea id="codeExplanation" class="form-textarea" placeholder="Why did you choose this approach?"
                         rows="2"></textarea>
                 </div>
+
                 <div class="answer-actions mt-md">
-                    <button id="interruptSubmitBtn" class="btn btn-primary" disabled>Answer & Resume Coding</button>
+                    <div style="font-size: 0.8rem; color: var(--text-muted); margin-right: auto;" id="codingTimer">Time:
+                        0s
+                    </div>
+                    <button id="codeSubmitBtn" class="btn btn-primary" disabled>
+                        Submit Code →
+                    </button>
                 </div>
             </div>
+
+            <!-- ─── CODING INTERRUPT MODAL ───────────────── -->
+            <div id="interruptModal" class="hidden"
+                style="position: fixed; inset: 0; background: rgba(0,0,0,0.7); z-index: 100; display: flex; align-items: center; justify-content: center; backdrop-filter: blur(4px);">
+                <div class="glass-card" style="max-width: 500px; width: 90%; animation: slideIn 0.3s ease;">
+                    <div class="question-badge follow-up">
+                        <span>🛑 Interruption</span>
+                    </div>
+                    <p class="question-text mt-md" id="interruptQuestion"></p>
+                    <div class="form-group mt-lg">
+                        <textarea id="interruptInput" class="form-textarea" placeholder="Answer the interviewer..."
+                            rows="2"></textarea>
+                    </div>
+                    <div class="answer-actions mt-md">
+                        <button id="interruptSubmitBtn" class="btn btn-primary" disabled>Answer & Resume Coding</button>
+                    </div>
+                </div>
+            </div>
+
+            <!-- ─── COMPLETION STATE ─────────────────────── -->
+            <div id="completionArea" class="hidden">
+                <div class="text-center slide-in">
+                    <div style="font-size: 3rem; margin-bottom: var(--space-md);">✅</div>
+                    <h2>Interview Complete!</h2>
+                    <p class="subtitle mt-md" id="completionMessage">Here's your Interview Readiness Score.</p>
+                </div>
+
+                <div id="completionContent" class="mt-xl"></div>
+
+                <div class="mt-xl">
+                    <h3 style="margin-bottom: var(--space-lg);">📝 Full Transcript</h3>
+                    <div id="transcriptList"></div>
+                </div>
+
+                <div class="text-center mt-xl">
+                    <a href="/" class="btn btn-secondary btn-lg">← Start New Interview</a>
+                </div>
+            </div>
+
         </div>
-
-        <!-- ─── COMPLETION STATE ─────────────────────── -->
-        <div id="completionArea" class="hidden">
-            <div class="text-center slide-in">
-                <div style="font-size: 3rem; margin-bottom: var(--space-md);">✅</div>
-                <h2>Interview Complete!</h2>
-                <p class="subtitle mt-md" id="completionMessage">Great job. Here's your session summary.</p>
-            </div>
-
-            <div class="summary-grid mt-xl" id="summaryStats"></div>
-
-            <div class="mt-xl">
-                <h3 style="margin-bottom: var(--space-lg);">📝 Full Transcript</h3>
-                <div id="transcriptList"></div>
-            </div>
-
-            <div class="text-center mt-xl">
-                <a href="/" class="btn btn-secondary btn-lg">← Start New Interview</a>
-            </div>
-        </div>
-
     </div>
 
     <script src="/js/interview.js"></script>

@@ -1,7 +1,7 @@
 // ============================================================
-// server.js — Express Backend (Interview AI Platform v2)
+// server.js — Express Backend (Interview AI Platform v3)
 // ============================================================
-// V2: Added MCQ, coding, behavior signal, and speech endpoints
+// V3: Edge TTS + Scoring Engine + Anti-AI Detection
 // ============================================================
 
 require('dotenv').config();
@@ -9,6 +9,7 @@ const express = require('express');
 const cors = require('cors');
 const path = require('path');
 const engine = require('./interview-engine');
+const tts = require('./tts');
 
 const app = express();
 const PORT = process.env.PORT || 3000;
@@ -189,10 +190,34 @@ app.get('/api/interview/:id/transcript', (req, res) => {
     }
 });
 
+// ─── TEXT-TO-SPEECH ─────────────────────────────────────────
+
+app.get('/api/tts', async (req, res) => {
+    try {
+        const text = req.query.text;
+        if (!text) {
+            return res.status(400).json({ error: 'text query parameter is required' });
+        }
+
+        const result = await tts.generateSpeech(text);
+
+        if (result.fallback) {
+            // Tell client to use WebSpeech instead
+            return res.json({ fallback: true });
+        }
+
+        // Send audio file
+        res.sendFile(result.audioPath);
+    } catch (err) {
+        console.error('TTS error:', err);
+        res.json({ fallback: true });
+    }
+});
+
 // ─── HEALTH ─────────────────────────────────────────────────
 
 app.get('/api/health', (req, res) => {
-    res.json({ status: 'ok', version: '2.0.0', timestamp: new Date().toISOString() });
+    res.json({ status: 'ok', version: '3.0.0', timestamp: new Date().toISOString() });
 });
 
 // ─── FALLBACK ───────────────────────────────────────────────
@@ -202,8 +227,8 @@ app.get('*', (req, res) => {
 
 // ─── START ──────────────────────────────────────────────────
 app.listen(PORT, () => {
-    console.log(`\n🚀 Interview AI Platform v2`);
+    console.log(`\n🚀 Interview AI Platform v3`);
     console.log(`   Server running at http://localhost:${PORT}`);
-    console.log(`   Features: Spoken + MCQ + Coding + Speech`);
+    console.log(`   Features: Spoken + MCQ + Coding + Edge TTS + Scoring`);
     console.log(`   API: http://localhost:${PORT}/api/health\n`);
 });

@@ -1,8 +1,8 @@
 // ============================================================
-// interview-engine.js — Interview State Machine (v2)
+// interview-engine.js — Interview State Machine (v3)
 // ============================================================
 // Full 10-question format: spoken + MCQ + coding
-// With interruptions, IDK detection, and SQLite persistence
+// V3: Scoring engine + anti-AI detection
 // ============================================================
 
 const { v4: uuidv4 } = require('uuid');
@@ -10,6 +10,7 @@ const fs = require('fs');
 const path = require('path');
 const ai = require('./ai');
 const database = require('./database');
+const scoring = require('./scoring');
 
 // Ensure transcripts dir exists
 const TRANSCRIPTS_DIR = path.join(__dirname, 'data', 'transcripts');
@@ -510,12 +511,17 @@ function completeInterview(session) {
     const duration = session.endTime - session.startTime;
 
     database.completeInterview(session.id, session.endTime, duration);
+    // V3: Compute score and risk flags
+    const scoreResult = scoring.computeScore(session);
+    session.score = scoreResult;
+
     saveTranscript(session);
 
     return {
         state: STATES.COMPLETED,
         message: 'Interview completed. Thank you!',
         summary: buildSummary(session),
+        score: scoreResult,
     };
 }
 
@@ -603,6 +609,7 @@ function buildTranscript(session) {
             interruptionResponses: slot.interruptionResponses,
             behaviorData: slot.behaviorData,
         })),
+        analysis: session.score,
     };
 }
 

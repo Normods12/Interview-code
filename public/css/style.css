@@ -845,3 +845,147 @@ p {
     border: 1px solid rgba(255, 107, 107, 0.3);
     box-shadow: 0 0 60px rgba(255, 107, 107, 0.1);
 }
+
+/* ─── V3: SCORE HERO ─────────────────────────────────────── */
+.score-hero {
+    text-align: center;
+    padding: var(--space-xl) 0;
+    animation: slideIn 0.6s ease;
+}
+
+.score-circle {
+    width: 160px;
+    height: 160px;
+    border-radius: 50%;
+    border: 4px solid;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    margin: 0 auto var(--space-lg);
+    background: rgba(255, 255, 255, 0.03);
+    box-shadow: 0 0 40px rgba(0, 0, 0, 0.3);
+    animation: pulse 2s ease infinite;
+}
+
+@keyframes pulse {
+
+    0%,
+    100% {
+        box-shadow: 0 0 40px rgba(0, 0, 0, 0.3);
+    }
+
+    50% {
+        box-shadow: 0 0 60px rgba(255, 255, 255, 0.08);
+    }
+}
+
+.score-number {
+    font-size: 3rem;
+    font-weight: 800;
+    line-height: 1;
+    font-family: var(--font-heading);
+}
+
+.score-label {
+    font-size: 0.75rem;
+    color: var(--text-muted);
+    margin-top: 4px;
+}
+
+.score-grade {
+    font-size: 2rem;
+    font-weight: 700;
+    font-family: var(--font-heading);
+}
+
+.score-grade-label {
+    font-size: 1rem;
+    color: var(--text-secondary);
+    margin-top: 4px;
+}
+
+/* ─── V3: SCORE BREAKDOWN ────────────────────────────────── */
+.score-breakdown {
+    max-width: 500px;
+    margin: var(--space-xl) auto 0;
+    display: flex;
+    flex-direction: column;
+    gap: var(--space-md);
+}
+
+.score-metric {
+    display: flex;
+    align-items: center;
+    gap: var(--space-md);
+}
+
+.metric-label {
+    flex: 0 0 160px;
+    font-size: 0.85rem;
+    color: var(--text-secondary);
+}
+
+.metric-bar {
+    flex: 1;
+    height: 8px;
+    background: rgba(255, 255, 255, 0.06);
+    border-radius: 4px;
+    overflow: hidden;
+}
+
+.metric-fill {
+    height: 100%;
+    border-radius: 4px;
+    transition: width 1s ease;
+}
+
+.metric-value {
+    flex: 0 0 45px;
+    text-align: right;
+    font-size: 0.85rem;
+    font-weight: 600;
+    color: var(--text-primary);
+}
+
+/* ─── V3: RISK FLAGS ─────────────────────────────────────── */
+.risk-flags {
+    max-width: 500px;
+    margin: var(--space-xl) auto 0;
+}
+
+.risk-flags h4 {
+    margin-bottom: var(--space-md);
+    color: var(--text-secondary);
+}
+
+.risk-flag {
+    display: flex;
+    align-items: flex-start;
+    gap: var(--space-sm);
+    padding: var(--space-md);
+    border-radius: var(--radius-md);
+    margin-bottom: var(--space-sm);
+    font-size: 0.85rem;
+    line-height: 1.5;
+}
+
+.risk-flag.risk-warning {
+    background: rgba(253, 203, 110, 0.08);
+    border: 1px solid rgba(253, 203, 110, 0.2);
+}
+
+.risk-flag.risk-danger {
+    background: rgba(255, 107, 107, 0.08);
+    border: 1px solid rgba(255, 107, 107, 0.2);
+}
+
+.risk-icon {
+    flex-shrink: 0;
+    font-size: 1rem;
+}
+
+.risk-detail {
+    color: var(--text-muted);
+    margin-left: var(--space-sm);
+}

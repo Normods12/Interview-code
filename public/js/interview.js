@@ -1,7 +1,7 @@
 // ============================================================
-// interview.js — Frontend Interview Logic (v2)
+// interview.js — Frontend Interview Logic (v3)
 // ============================================================
-// Handles spoken, MCQ, and coding flows + speech + paste detect
+// V3: Edge TTS + Score Display + Anti-AI flags
 // ============================================================
 
 const API = 'http://localhost:3000/api';
@@ -28,6 +28,8 @@ let pasteCount = 0;
 let firstKeystrokeTime = null;
 let codingStartTimestamp = null;
 let interruptTriggered = false;
+let currentAudio = null; // V3: Track audio instance to stop it on skip
+let ttsGenId = 0; // V3: Generation ID to prevent async race conditions
 
 // ─── BOOT ───────────────────────────────────────────────────
 document.addEventListener('DOMContentLoaded', () => {
@@ -58,14 +60,19 @@ document.addEventListener('DOMContentLoaded', () => {
     setupSpeech();
 
     // Setup submit handlers
+    // Setup submit handlers
     setupSpokenHandlers();
     setupMCQHandlers();
     setupCodingHandlers();
     setupInterruptHandler();
     setupSkipButton();
+    setupVideoControls(); // V3.5
 
-    // Start — first question arrives via URL params
-    loadFirstQuestion();
+    // Init Webcam (V3.5) - Gatekeeper
+    initWebcam();
+
+    // Wire up Start Button
+    document.getElementById('startInterviewBtn').addEventListener('click', startInterview);
 });
 
 // ─── SPEECH SETUP ────────────────────────────────────────────
@@ -82,12 +89,20 @@ function setupSpeech() {
     });
 
     // STT setup
+    const SILENCE_DURATION = 3000; // 3 seconds
+    let silenceTimer = null;
+    let isIntro = false;
+
+    // STT setup
     const SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition;
     if (SpeechRecognition) {
         recognition = new SpeechRecognition();
         recognition.continuous = true;
         recognition.interimResults = true;
         recognition.lang = 'en-US';
+
+        const feedbackBubble = document.getElementById('speechFeedback');
+        const feedbackText = document.getElementById('feedbackText');
 
         recognition.onresult = (event) => {
             let finalTranscript = '';
@@ -102,28 +117,93 @@ function setupSpeech() {
                 }
             }
 
-            // Find the active textarea
+            // Find the active textarea and append final result
             const activeInput = getActiveTextarea();
             if (activeInput && finalTranscript) {
                 activeInput.value += (activeInput.value ? ' ' : '') + finalTranscript;
                 activeInput.dispatchEvent(new Event('input'));
             }
 
+            // V3.5 Speech UI: Show interim or final text
             if (interimTranscript) {
-                statusEl.textContent = `🎙️ "${interimTranscript.slice(-50)}..."`;
+                feedbackBubble.classList.remove('hidden');
+                feedbackText.textContent = `Listening: "${interimTranscript}"`;
+                statusEl.textContent = '🎙️ Listening...';
+
+                // Reset silence timer while talking
+                clearTimeout(silenceTimer);
+                feedbackBubble.classList.remove('preparing-submit');
             } else if (finalTranscript) {
-                statusEl.textContent = '✅ Speech captured';
+                feedbackText.textContent = `Captured: "${finalTranscript}"`;
+                statusEl.textContent = '✅ Captured';
+
+                // Start silence timer after final result
+                resetSilenceTimer();
             }
         };
 
+        function resetSilenceTimer() {
+            clearTimeout(silenceTimer);
+
+            // Only auto-submit if we have input and mic is on
+            const activeInput = getActiveTextarea();
+            if (!micEnabled || !activeInput || activeInput.value.trim().length < 2) return;
+
+            // Visual cue after 1.5s
+            silenceTimer = setTimeout(() => {
+                feedbackBubble.classList.add('preparing-submit');
+                statusEl.textContent = '⏳ Finishing...';
+
+                // Submit after another 1.5s (Total 3s)
+                silenceTimer = setTimeout(() => {
+                    triggerSilenceSubmit();
+                }, 1500);
+            }, 1500);
+        }
+
+        function triggerSilenceSubmit() {
+            if (!micEnabled) return;
+
+            // Visual feedback
+            const feedbackBubble = document.getElementById('speechFeedback');
+            const statusEl = document.getElementById('speechStatus');
+            feedbackBubble.classList.remove('preparing-submit');
+            feedbackBubble.classList.add('hidden');
+            statusEl.textContent = '🚀 Auto-submitting...';
+
+            if (isIntro) {
+                // Handle Intro completion
+                isIntro = false;
+                console.log('[Intro] User finished speaking. Moving to Q1.');
+                speak("Thanks. Let's get started.");
+                setTimeout(() => {
+                    loadFirstQuestion();
+                }, 2000);
+            } else {
+                // Click the appropriate submit button
+                const activeInput = getActiveTextarea();
+                // Determine which button to click based on active input
+                if (activeInput && activeInput.id === 'answerInput') {
+                    document.getElementById('submitBtn').click();
+                } else if (activeInput && activeInput.id === 'mcqJustifyInput') {
+                    document.getElementById('mcqJustifySubmitBtn').click();
+                } else if (activeInput && activeInput.id === 'interruptInput') {
+                    document.getElementById('interruptSubmitBtn').click();
+                }
+            }
+        }
+
         recognition.onerror = (e) => {
             if (e.error !== 'no-speech') {
-                statusEl.textContent = `⚠️ Mic error: ${e.error}`;
+                statusEl.textContent = `⚠️ Error: ${e.error}`;
+                feedbackText.textContent = `⚠️ Error: ${e.error}`;
             }
         };
 
         recognition.onend = () => {
-            if (micEnabled) recognition.start(); // auto-restart
+            // If mic is enabled but stopped (silence), just restart
+            if (micEnabled) recognition.start();
+            else feedbackBubble.classList.add('hidden');
         };
 
         micBtn.addEventListener('click', () => {
@@ -133,11 +213,15 @@ function setupSpeech() {
                 micBtn.textContent = '🎤 Mic On';
                 micBtn.classList.add('active');
                 statusEl.textContent = '🎙️ Listening...';
+                feedbackBubble.classList.remove('hidden');
+                feedbackText.textContent = 'Listening...';
             } else {
                 recognition.stop();
+                clearTimeout(silenceTimer);
                 micBtn.textContent = '🎤 Mic Off';
                 micBtn.classList.remove('active');
-                statusEl.textContent = '';
+                statusEl.textContent = 'Mic off';
+                feedbackBubble.classList.add('hidden');
             }
         });
     } else {
@@ -148,7 +232,7 @@ function setupSpeech() {
 }
 
 function getActiveTextarea() {
-    if (!document.getElementById('spokenArea').classList.contains('hidden')) {
+    if (!document.getElementById('spokenArea').classList.contains('hidden') || isIntro) {
         return document.getElementById('answerInput');
     }
     if (!document.getElementById('mcqJustifyArea').classList.contains('hidden')) {
@@ -163,13 +247,68 @@ function getActiveTextarea() {
     return null;
 }
 
+// ─── AUDIO CONTROL ──────────────────────────────────────────
 function speak(text) {
-    if (!speechEnabled || !synth) return;
-    synth.cancel();
+    if (!speechEnabled) return;
+    stopAudio();
+
+    // Animate avatar
+    const avatar = document.getElementById('interviewerImage');
+    if (avatar) avatar.classList.add('speaking-pulse');
+
+    const myId = ++ttsGenId;
+
+    const encoded = encodeURIComponent(text);
+    fetch(`${API}/tts?text=${encoded}`)
+        .then(res => {
+            if (myId !== ttsGenId) return;
+            const contentType = res.headers.get('content-type') || '';
+            if (contentType.includes('audio') || contentType.includes('octet-stream')) {
+                return res.blob().then(blob => {
+                    if (myId !== ttsGenId) return;
+                    const url = URL.createObjectURL(blob);
+                    const audio = new Audio(url);
+                    currentAudio = audio;
+
+                    audio.play().catch(() => {
+                        if (myId === ttsGenId) speakWebSpeech(text);
+                    });
+
+                    audio.onended = () => {
+                        URL.revokeObjectURL(url);
+                        if (currentAudio === audio) {
+                            currentAudio = null;
+                            if (avatar) avatar.classList.remove('speaking-pulse');
+                        }
+                    };
+                });
+            } else {
+                if (myId === ttsGenId) speakWebSpeech(text);
+            }
+        })
+        .catch(() => {
+            if (myId === ttsGenId) speakWebSpeech(text);
+        });
+}
+
+function stopAudio() {
+    ttsGenId++;
+    if (currentAudio) {
+        currentAudio.pause();
+        currentAudio = null;
+    }
+    if (synth) synth.cancel();
+
+    const avatar = document.getElementById('interviewerImage');
+    if (avatar) avatar.classList.remove('speaking-pulse');
+}
+
+function speakWebSpeech(text) {
+    if (!synth) return;
+    stopAudio(); // Ensure clean slate
     const utterance = new SpeechSynthesisUtterance(text);
     utterance.rate = 1.0;
     utterance.pitch = 1.0;
-    // Prefer a natural-sounding voice
     const voices = synth.getVoices();
     const preferred = voices.find(v => v.name.includes('Google') && v.lang.startsWith('en'))
         || voices.find(v => v.lang.startsWith('en'));
@@ -211,9 +350,27 @@ async function loadFirstQuestion() {
 }
 
 // ─── RESPONSE ROUTER ────────────────────────────────────────
+function hideAll() {
+    const ids = [
+        'spokenArea', 'mcqArea', 'codingArea', 'completionArea', 'mcqJustifyArea',
+        'spokenOverlay', 'interruptModal'
+    ];
+    ids.forEach(id => {
+        const el = document.getElementById(id);
+        if (el) el.classList.add('hidden');
+    });
+}
+
 function handleResponse(data) {
     hideAll();
+    stopAudio();
     document.getElementById('loadingState').classList.add('hidden');
+
+    // Reset completion mode
+    document.body.classList.remove('mode-completed');
+
+    // NOTE: contentStage.active is now managed by individual show functions
+    // based on Spoken vs Task mode requirements.
 
     console.log('[handleResponse]', data.type, data.slotType, data.state, data);
 
@@ -240,10 +397,41 @@ function handleResponse(data) {
     }
 }
 
+
+
+// ─── MODE HELPERS ───────────────────────────────────────────
+function startSpokenMode(questionText) {
+    // Zoom Style: Full video, Overlay Caption, No Content Stage
+    document.body.classList.remove('layout-task');
+    document.getElementById('contentStage').classList.remove('active');
+
+    const overlay = document.getElementById('spokenOverlay');
+    overlay.classList.remove('hidden');
+    document.getElementById('spokenCaptionText').textContent = questionText;
+
+    // Reset overlay timer
+    const timerEl = document.getElementById('spokenTimer');
+    timerEl.textContent = "00:00";
+}
+
+function startTaskMode() {
+    // Task Style: Hide Interviewer, Show Content Stage
+    document.body.classList.add('layout-task');
+    document.getElementById('contentStage').classList.add('active');
+    document.getElementById('spokenOverlay').classList.add('hidden');
+
+    // Force candidate camera visible
+    const myCam = document.getElementById('userVideoContainer');
+    if (myCam) myCam.style.display = 'block';
+}
+
 // ─── SHOW SPOKEN QUESTION ───────────────────────────────────
 function showSpokenQuestion(data) {
+    startSpokenMode(data.question);
+
+    // We still populate the hidden spokenArea for logic, but it's invisible
     const area = document.getElementById('spokenArea');
-    area.classList.remove('hidden');
+    area.classList.remove('hidden'); // It's inside contentStage which is hidden
 
     const badge = document.getElementById('questionBadge');
     if (data.isFollowUp) {
@@ -258,6 +446,12 @@ function showSpokenQuestion(data) {
     document.getElementById('answerInput').value = '';
     document.getElementById('submitBtn').disabled = true;
 
+    // Enable the overlay button
+    const finishBtn = document.getElementById('finishSpeakingBtn');
+    if (finishBtn) finishBtn.disabled = true; // Wait for some input? Or just enable?
+    // Actually, in Zoom mode, we might want to enable it immediately or after a few seconds
+    if (finishBtn) finishBtn.disabled = false;
+
     // Speak the question
     speak(data.question);
 
@@ -267,14 +461,24 @@ function showSpokenQuestion(data) {
     answerTimerInterval = setInterval(() => {
         const s = Math.floor((Date.now() - answerStartTime) / 1000);
         document.getElementById('answerTimer').textContent = `Thinking time: ${s}s`;
+
+        // Update overlay timer
+        const timerEl = document.getElementById('spokenTimer');
+        if (timerEl) {
+            const m = Math.floor(s / 60).toString().padStart(2, '0');
+            const sec = (s % 60).toString().padStart(2, '0');
+            timerEl.textContent = `${m}:${sec}`;
+        }
     }, 1000);
 
-    // Focus input
+    // Focus input (even if hidden, to capture keyboard)
     setTimeout(() => document.getElementById('answerInput').focus(), 300);
 }
 
 // ─── SHOW MCQ ───────────────────────────────────────────────
 function showMCQ(data) {
+    startTaskMode();
+
     const area = document.getElementById('mcqArea');
     area.classList.remove('hidden');
 
@@ -307,8 +511,8 @@ function showMCQ(data) {
         optionsContainer.appendChild(btn);
     });
 
-    // Speak the question
-    speak(data.question);
+    // Speak the question - DISABLED for Task Mode per user request
+    // speak(data.question);
 
     // Timer
     mcqStartTime = Date.now();
@@ -341,6 +545,8 @@ function showMCQJustify(data) {
 
 // ─── SHOW CODING ────────────────────────────────────────────
 function showCoding(data) {
+    startTaskMode();
+
     const area = document.getElementById('codingArea');
     area.classList.remove('hidden');
 
@@ -360,7 +566,8 @@ function showCoding(data) {
     codingStartTimestamp = Date.now();
     interruptTriggered = false;
 
-    speak(data.problem);
+    // Speak the problem - DISABLED for Task Mode per user request
+    // speak(data.problem);
 
     // Timer
     codingStartTime = Date.now();
@@ -426,26 +633,86 @@ function showCompletion(data) {
     clearInterval(answerTimerInterval);
     clearInterval(mcqTimerInterval);
     clearInterval(codingTimerInterval);
+    stopAudio(); // V3: Stop audio on completion
     if (synth) synth.cancel();
 
     hideAll();
     const area = document.getElementById('completionArea');
     area.classList.remove('hidden');
 
-    if (data.summary) {
-        const s = data.summary;
-        document.getElementById('summaryStats').innerHTML = `
-            <div class="stat-card"><div class="stat-number">${s.totalQuestions}</div><div class="stat-label">Questions</div></div>
-            <div class="stat-card"><div class="stat-number">${s.spokenQuestions || '-'}</div><div class="stat-label">Spoken</div></div>
-            <div class="stat-card"><div class="stat-number">${s.mcqQuestions || '-'}</div><div class="stat-label">MCQs</div></div>
-            <div class="stat-card"><div class="stat-number">${s.codingQuestions || '-'}</div><div class="stat-label">Coding</div></div>
-            <div class="stat-card"><div class="stat-number">${s.averageQuality}/10</div><div class="stat-label">Avg Quality</div></div>
-            <div class="stat-card"><div class="stat-number">${s.durationFormatted}</div><div class="stat-label">Duration</div></div>
+    // V3.5: Completion mode — hide all video elements, full screen scoring
+    document.body.classList.add('mode-completed');
+
+    // V3: Score display
+    const score = data.score;
+    const summary = data.summary;
+
+    let scoreHtml = '';
+    if (score) {
+        const g = score.grade || {};
+        const b = score.breakdown || {};
+
+        scoreHtml = `
+            <div class="score-hero">
+                <div class="score-circle" style="border-color: ${g.color || '#888'}">
+                    <span class="score-number" style="color: ${g.color || '#fff'}">${score.overall}</span>
+                    <span class="score-label">out of 100</span>
+                </div>
+                <div class="score-grade" style="color: ${g.color || '#fff'}">${g.letter || '?'}</div>
+                <div class="score-grade-label">${g.label || ''}</div>
+            </div>
+
+            <div class="score-breakdown">
+                <div class="score-metric"><span class="metric-label">🎯 Answer Quality</span><div class="metric-bar"><div class="metric-fill" style="width:${b.answerQuality || 0}%; background:${getMetricColor(b.answerQuality)}"></div></div><span class="metric-value">${b.answerQuality || 0}%</span></div>
+                <div class="score-metric"><span class="metric-label">📊 Depth Stability</span><div class="metric-bar"><div class="metric-fill" style="width:${b.depthStability || 0}%; background:${getMetricColor(b.depthStability)}"></div></div><span class="metric-value">${b.depthStability || 0}%</span></div>
+                <div class="score-metric"><span class="metric-label">📋 MCQ Accuracy</span><div class="metric-bar"><div class="metric-fill" style="width:${b.mcqAccuracy || 0}%; background:${getMetricColor(b.mcqAccuracy)}"></div></div><span class="metric-value">${b.mcqAccuracy || 0}%</span></div>
+                <div class="score-metric"><span class="metric-label">💻 Coding Score</span><div class="metric-bar"><div class="metric-fill" style="width:${b.codingScore || 0}%; background:${getMetricColor(b.codingScore)}"></div></div><span class="metric-value">${b.codingScore || 0}%</span></div>
+                <div class="score-metric"><span class="metric-label">🛡️ Behavioral Trust</span><div class="metric-bar"><div class="metric-fill" style="width:${b.behavioralTrust || 0}%; background:${getMetricColor(b.behavioralTrust)}"></div></div><span class="metric-value">${b.behavioralTrust || 0}%</span></div>
+                <div class="score-metric"><span class="metric-label">🔗 Consistency</span><div class="metric-bar"><div class="metric-fill" style="width:${b.consistency || 0}%; background:${getMetricColor(b.consistency)}"></div></div><span class="metric-value">${b.consistency || 0}%</span></div>
+            </div>
+        `;
+
+        // Risk flags
+        if (score.riskFlags && score.riskFlags.length > 0) {
+            scoreHtml += `<div class="risk-flags"><h4>⚠️ Risk Flags</h4>`;
+            score.riskFlags.forEach(flag => {
+                const cls = flag.severity === 'danger' ? 'risk-danger' : 'risk-warning';
+                scoreHtml += `<div class="risk-flag ${cls}"><span class="risk-icon">${flag.icon}</span><strong>${flag.label}</strong><span class="risk-detail">${flag.detail}</span></div>`;
+            });
+            scoreHtml += `</div>`;
+        }
+    }
+
+    // Stats cards
+    let statsHtml = '';
+    if (summary) {
+        statsHtml = `
+            <div class="summary-grid">
+                <div class="stat-card"><div class="stat-number">${summary.totalQuestions}</div><div class="stat-label">Questions</div></div>
+                <div class="stat-card"><div class="stat-number">${summary.spokenQuestions || '-'}</div><div class="stat-label">Spoken</div></div>
+                <div class="stat-card"><div class="stat-number">${summary.mcqQuestions || '-'}</div><div class="stat-label">MCQs</div></div>
+                <div class="stat-card"><div class="stat-number">${summary.codingQuestions || '-'}</div><div class="stat-label">Coding</div></div>
+                <div class="stat-card"><div class="stat-number">${summary.averageQuality}/10</div><div class="stat-label">Avg Quality</div></div>
+                <div class="stat-card"><div class="stat-number">${summary.durationFormatted}</div><div class="stat-label">Duration</div></div>
+            </div>
         `;
     }
 
+    document.getElementById('completionContent').innerHTML = `
+        ${scoreHtml}
+        <div class="mt-xl">${statsHtml}</div>
+    `;
+
     // Load full transcript
     loadTranscript();
+}
+
+function getMetricColor(value) {
+    if (value >= 80) return '#00ff88';
+    if (value >= 60) return '#c8ff00';
+    if (value >= 40) return '#ffcc00';
+    if (value >= 20) return '#ff9900';
+    return '#ff3333';
 }
 
 async function loadTranscript() {
@@ -742,12 +1009,10 @@ function setupInterruptHandler() {
 
 // ─── SKIP BUTTON ────────────────────────────────────────────
 function setupSkipButton() {
-    const skipBtn = document.getElementById('skipBtn');
-    if (!skipBtn) return;
-
-    skipBtn.addEventListener('click', async () => {
-        skipBtn.disabled = true;
-        showThinking('Skipping to next question...');
+    async function doSkip(btn) {
+        if (btn) btn.disabled = true;
+        stopAudio();
+        showThinking('⏭️ Skipping to next question...');
 
         try {
             const res = await fetch(`${API}/interview/skip`, {
@@ -757,14 +1022,22 @@ function setupSkipButton() {
             });
             const data = await res.json();
             hideThinking();
-            skipBtn.disabled = false;
+            if (btn) btn.disabled = false;
             handleResponse(data);
         } catch (err) {
             hideThinking();
             console.error('Skip error:', err);
-            skipBtn.disabled = false;
+            if (btn) btn.disabled = false;
+            alert('Skip failed — see console for details.');
         }
-    });
+    }
+
+    // Bind BOTH skip buttons
+    const skipBtn = document.getElementById('skipBtn');
+    if (skipBtn) skipBtn.addEventListener('click', () => doSkip(skipBtn));
+
+    const floatingSkipBtn = document.getElementById('floatingSkipBtn');
+    if (floatingSkipBtn) floatingSkipBtn.addEventListener('click', () => doSkip(floatingSkipBtn));
 }
 
 // ─── UI HELPERS ─────────────────────────────────────────────
@@ -790,6 +1063,9 @@ function updateProgress(current, total) {
     const pct = Math.round((current / total) * 100);
     document.getElementById('progressFill').style.width = `${pct}%`;
     document.getElementById('progressText').textContent = `${current}/${total}`;
+    // Debug Q# badge
+    const debugQ = document.getElementById('debugQNum');
+    if (debugQ) debugQ.textContent = `Q ${current}/${total}`;
 }
 
 function escapeHtml(str) {
@@ -797,3 +1073,150 @@ function escapeHtml(str) {
     div.appendChild(document.createTextNode(str || ''));
     return div.innerHTML;
 }
+
+// ─── V3.5 VIDEO LOGIC ───────────────────────────────────────
+async function initWebcam() {
+    const camStatus = document.getElementById('checkCam').querySelector('.status');
+    const micStatus = document.getElementById('checkMic').querySelector('.status');
+    const startBtn = document.getElementById('startInterviewBtn');
+
+    try {
+        const stream = await navigator.mediaDevices.getUserMedia({ video: true, audio: true });
+        const video = document.getElementById('userVideo');
+
+        // V3.5 Fix: Ensure attributes are set for autoplay
+        video.setAttribute('autoplay', '');
+        video.setAttribute('muted', '');
+        video.setAttribute('playsinline', '');
+
+        video.srcObject = stream;
+        video.muted = true; // Avoid echo
+
+        // Don't play yet! Wait for user interaction (Start Button)
+        // Just verify track status
+        if (stream.getVideoTracks().length > 0 && stream.getVideoTracks()[0].readyState === 'live') {
+            console.log('[Webcam] Connected (Waiting for start)');
+            document.getElementById('checkCam').classList.add('success');
+            camStatus.textContent = 'Connected';
+            document.getElementById('checkMic').classList.add('success');
+            micStatus.textContent = 'Connected';
+            startBtn.disabled = false;
+        } else {
+            throw new Error('Stream not live');
+        }
+
+    } catch (err) {
+        console.error('[Webcam] Access denied or error:', err);
+
+        document.getElementById('checkCam').classList.add('error');
+        camStatus.textContent = 'Denied/Error';
+
+        document.getElementById('checkMic').classList.add('error');
+        micStatus.textContent = 'Denied/Error';
+
+        // Fallback UI in PIP
+        const container = document.getElementById('userVideoContainer');
+        container.innerHTML = `
+            <div style="display:flex;flex-direction:column;align-items:center;justify-content:center;height:100%;color:#666;text-align:center;font-size:0.8rem;background:#111;">
+                <div style="font-size:2rem;margin-bottom:5px;">📷🚫</div>
+                <span>Camera Blocked</span>
+                <button onclick="initWebcam()" style="margin-top:5px;padding:2px 6px;font-size:0.7rem;cursor:pointer;">Retry</button>
+            </div>
+        `;
+    }
+}
+
+function startInterview() {
+    const lobby = document.getElementById('lobbyScreen');
+    const video = document.getElementById('userVideo');
+
+    // Explicitly play video on user click (Bypass Autoplay Policy)
+    if (video && video.srcObject) {
+        video.play().catch(e => console.error('[Webcam] Play error:', e));
+    }
+
+    lobby.style.opacity = '0';
+    setTimeout(() => {
+        lobby.classList.add('hidden');
+        playIntro();
+    }, 500);
+}
+
+function playIntro() {
+    // V3.5: AI Introduction Sequence
+    const name = new URLSearchParams(window.location.search).get('name') || 'Candidate';
+    const introText = `Hi ${name}, I'm Christopher, a Senior Engineer at TechCorp. I'll be conducting your interview today. Could you start by briefly introducing yourself?`;
+
+    // Show speaking state
+    speak(introText);
+
+    // Set Intro State
+    isIntro = true;
+
+    // Auto-enable mic for "Natural Conversation" experience
+    // We wait a bit for TTS to start so we don't pick up the start of TTS if echo cancellation fails
+    setTimeout(() => {
+        const micBtn = document.getElementById('micToggle');
+        if (micBtn && !micEnabled) {
+            micBtn.click();
+        }
+        console.log('[Intro] Mic enabled. Waiting for user input + silence...');
+
+        // Visual hint
+        const feedbackBubble = document.getElementById('speechFeedback');
+        const feedbackText = document.getElementById('feedbackText');
+        feedbackBubble.classList.remove('hidden');
+        feedbackText.textContent = "Listening for your intro...";
+    }, 1000);
+
+    // DO NOT use hardcoded timeouts here anymore.
+    // triggerSilenceSubmit() will handle the transition.
+}
+
+function setupVideoControls() {
+    const micBtn = document.getElementById('micBtn');
+    const camBtn = document.getElementById('camBtn');
+
+    // Mic Toggle (Visual + functional)
+    micBtn.addEventListener('click', () => {
+        const originalMicBtn = document.getElementById('micToggle');
+        if (originalMicBtn) originalMicBtn.click();
+
+        micBtn.classList.toggle('danger');
+        // V3.5 Polish: Don't replace SVG with text! Just toggle class.
+        // micBtn.textContent = micBtn.classList.contains('danger') ? '🔇' : '🎤';
+    });
+
+    // Cam Toggle
+    camBtn.addEventListener('click', () => {
+        const video = document.getElementById('userVideo');
+        const stream = video.srcObject;
+        if (stream) {
+            stream.getVideoTracks().forEach(track => track.enabled = !track.enabled);
+            const isOff = !stream.getVideoTracks().some(t => t.enabled);
+            camBtn.classList.toggle('danger', isOff);
+            // V3.5 Polish: Don't replace SVG with text!
+        }
+    }); // End of speech toggle handler
+
+    // SETUP SPOKEN OVERLAY HANDLERS
+    const finishBtn = document.getElementById('finishSpeakingBtn');
+    if (finishBtn) {
+        finishBtn.addEventListener('click', () => {
+            // Trigger the hidden submit button
+            const submitBtn = document.getElementById('submitBtn');
+            if (submitBtn) {
+                // If input empty, maybe put a placeholder?
+                if (document.getElementById('answerInput').value.trim().length === 0) {
+                    document.getElementById('answerInput').value = '[Voice Answer Submitted]';
+                }
+                submitBtn.disabled = false;
+                submitBtn.click();
+            }
+        });
+    }
+
+} // End of DOMContentLoaded
+
+// (Duplicate setupSkipButton removed — original is above at ~line 895)
+

@@ -1,0 +1,628 @@
+/* ============================================================
+   VIDEO LAYOUT (Zoom/Meet Style)
+   ============================================================ */
+
+/* ─── GRID CONTAINER ───────────────────────────────────────── */
+#videoStage {
+    position: fixed;
+    top: 0;
+    left: 0;
+    width: 100vw;
+    height: 100vh;
+    background: #1a1a1a;
+    display: grid;
+    grid-template-rows: 1fr auto;
+    /* Video area + Controls */
+    overflow: hidden;
+    z-index: 100;
+}
+
+/* ─── MAIN VIDEO AREA ──────────────────────────────────────── */
+.video-main {
+    position: relative;
+    width: 100%;
+    height: 100%;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    padding: var(--space-md);
+    transition: all 0.5s ease;
+}
+
+/* Interviewer (The "Host") */
+.interviewer-container {
+    position: relative;
+    width: 100%;
+    height: 100%;
+    max-width: 1200px;
+    max-height: 800px;
+    border-radius: var(--radius-lg);
+    overflow: hidden;
+    background: #000;
+    box-shadow: 0 10px 40px rgba(0, 0, 0, 0.5);
+    display: flex;
+    justify-content: center;
+    align-items: center;
+}
+
+#interviewerImage {
+    width: 100%;
+    height: 100%;
+    object-fit: cover;
+    transition: transform 0.2s ease;
+}
+
+/* Pulse animation when speaking */
+.speaking-pulse {
+    animation: speaker-glow 1.5s infinite alternate;
+    transform: scale(1.02);
+}
+
+@keyframes speaker-glow {
+    from {
+        box-shadow: 0 0 20px rgba(108, 92, 231, 0.3);
+    }
+
+    to {
+        box-shadow: 0 0 40px rgba(108, 92, 231, 0.6);
+    }
+}
+
+/* Candidate PIP (Picture-in-Picture) */
+#userVideoContainer {
+    position: absolute;
+    bottom: 20px;
+    right: 20px;
+    width: 280px;
+    aspect-ratio: 16/9;
+    background: #000;
+    border-radius: var(--radius-md);
+    overflow: hidden;
+    border: 2px solid rgba(255, 255, 255, 0.1);
+    box-shadow: 0 10px 30px rgba(0, 0, 0, 0.5);
+    z-index: 10;
+    transition: all 0.5s ease;
+}
+
+#userVideo {
+    width: 100%;
+    height: 100%;
+    object-fit: cover;
+    transform: scaleX(-1);
+    /* Mirror effect */
+}
+
+/* ─── CONTROL BAR ──────────────────────────────────────────── */
+/* ─── CONTROL BAR ──────────────────────────────────────────── */
+.video-controls {
+    position: fixed;
+    bottom: 0;
+    left: 0;
+    width: 100%;
+    height: 80px;
+    background: #2d2d2d;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    gap: var(--space-xl);
+    padding: 0 var(--space-xl);
+    border-top: 1px solid rgba(255, 255, 255, 0.1);
+    z-index: 1500;
+    /* Extremely high z-index to fix visibility */
+}
+
+.control-btn {
+    width: 60px;
+    height: 60px;
+    border-radius: 50%;
+    border: none;
+    background: rgba(255, 255, 255, 0.1);
+    /* Glassy default */
+    color: #fff;
+    cursor: pointer;
+    font-size: 1.2rem;
+    transition: all 0.2s ease;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+}
+
+.control-btn:hover {
+    background: rgba(255, 255, 255, 0.2);
+    transform: scale(1.05);
+}
+
+/* Off state / Danger state */
+.control-btn.danger {
+    background: #ff4757;
+    color: #fff;
+}
+
+/* Hangup is slightly different (pill shape) */
+.control-btn.danger-btn {
+    background: #ff4757;
+    width: 80px;
+    height: 50px;
+    border-radius: 30px;
+}
+
+.control-btn.danger-btn:hover {
+    background: #ff6b81;
+}
+
+.icon-svg {
+    width: 24px;
+    height: 24px;
+    /* Stroke-based icons (Feather) - no fill needed */
+}
+
+.status-badge {
+    position: absolute;
+    right: 20px;
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    font-size: 0.8rem;
+    font-weight: 600;
+    color: var(--text-muted);
+}
+
+.rec-dot {
+    width: 8px;
+    height: 8px;
+    background: var(--danger);
+    border-radius: 50%;
+    animation: blink 2s infinite;
+}
+
+@keyframes blink {
+
+    0%,
+    100% {
+        opacity: 1;
+    }
+
+    50% {
+        opacity: 0.3;
+    }
+}
+
+/* ─── CAMERA PIP ───────────────────────────────────────────── */
+#userVideoContainer {
+    z-index: 2000 !important;
+    background: #000;
+}
+
+#userVideo {
+    object-fit: cover;
+    width: 100%;
+    height: 100%;
+    transform: scaleX(-1);
+}
+
+/* ─── ICON TOGGLING ────────────────────────────────────────── */
+.icon-off {
+    display: none;
+}
+
+.control-btn.danger .icon-on {
+    display: none;
+}
+
+.control-btn.danger .icon-off {
+    display: block;
+}
+
+/* ─── FLOATING DEBUG CONTROLS ──────────────────────────────── */
+.floating-debug {
+    position: fixed;
+    bottom: 100px;
+    left: 20px;
+    right: auto;
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    z-index: 3000;
+}
+
+.debug-q-badge {
+    padding: 8px 16px;
+    background: rgba(78, 204, 163, 0.15);
+    border: 1px solid rgba(78, 204, 163, 0.4);
+    color: #4ecca3;
+    border-radius: 30px;
+    font-size: 0.85rem;
+    font-weight: 700;
+    font-family: 'JetBrains Mono', monospace;
+    backdrop-filter: blur(10px);
+    letter-spacing: 0.5px;
+}
+
+.floating-skip-btn {
+    padding: 10px 20px;
+    background: rgba(255, 107, 107, 0.15);
+    border: 1px solid rgba(255, 107, 107, 0.4);
+    color: #ff6b6b;
+    border-radius: 30px;
+    cursor: pointer;
+    font-size: 0.9rem;
+    font-weight: 600;
+    backdrop-filter: blur(10px);
+    transition: all 0.2s ease;
+}
+
+.floating-skip-btn:hover {
+    background: rgba(255, 107, 107, 0.3);
+    transform: scale(1.05);
+}
+
+.floating-skip-btn:disabled {
+    opacity: 0.5;
+    cursor: not-allowed;
+    transform: none;
+}
+
+/* ─── MODES: CONVERSATION vs TASK ──────────────────────────── */
+
+/* Task Mode: Hide interviewer, full-screen content, small candidate PIP */
+/* Task Mode: Hide interviewer, full-screen content, small candidate PIP */
+body.layout-task .video-main {
+    display: none !important;
+}
+
+body.layout-task #userVideoContainer {
+    position: fixed !important;
+    bottom: 90px !important;
+    right: 20px !important;
+    width: 180px !important;
+    height: 120px !important;
+    z-index: 2001 !important;
+    border-radius: var(--radius-md);
+    border: 2px solid rgba(255, 255, 255, 0.15);
+    box-shadow: 0 8px 24px rgba(0, 0, 0, 0.4);
+}
+
+/* Content Area (Questions / MCQ / Coding / Completion) */
+.content-stage {
+    position: fixed;
+    top: 0;
+    left: 0;
+    width: 100%;
+    height: calc(100vh - 80px);
+    padding: var(--space-xl);
+    overflow-y: auto;
+    z-index: 101;
+    display: none;
+    background: var(--bg-primary);
+}
+
+.content-stage.active {
+    display: block;
+}
+
+.content-stage #mcqArea,
+.content-stage #codingArea,
+.content-stage #completionArea {
+    max-width: 900px;
+    margin: 0 auto;
+}
+
+/* ─── COMPLETION MODE ──────────────────────────────────────── */
+body.mode-completed #videoStage {
+    display: none !important;
+}
+
+body.mode-completed .video-controls {
+    display: none !important;
+}
+
+body.mode-completed .floating-debug {
+    display: none !important;
+}
+
+/* Ensure User Video is HIDDEN in completion mode */
+body.mode-completed #userVideoContainer {
+    display: none !important;
+}
+
+/* Ensure Content Stage is VISIBLE and full screen in completion mode */
+body.mode-completed .content-stage {
+    display: block !important;
+    height: 100vh;
+    background: var(--bg-primary);
+    z-index: 9999;
+    /* Top level for completion */
+    overflow-y: auto;
+}
+
+/* ─── GLOBAL CANDIDATE PIP (V3.8 Re-impl) ──────────────────── */
+/* Fixed position to guarantee visibility over everything */
+#userVideoContainer {
+    position: fixed !important;
+    bottom: 20px;
+    right: 20px;
+    width: 200px;
+    /* Standard PIP size */
+    height: 130px;
+    z-index: 9000 !important;
+    /* Extremely high */
+    border-radius: 12px;
+    overflow: hidden;
+    box-shadow: 0 8px 32px rgba(0, 0, 0, 0.5);
+    border: 2px solid rgba(255, 255, 255, 0.1);
+    background: #000;
+    transition: all 0.3s ease;
+    display: block;
+    /* Default visible */
+}
+
+/* Optional: Slight adjust during task mode if needed, but fixed is fine */
+/* .layout-task #userVideoContainer { ... }  <-- No longer needed */
+
+/* ─── SPEECH FEEDBACK UI (V3.5 Polish) ─────────────────────── */
+.speech-feedback {
+    position: fixed;
+    top: 20px;
+    right: 20px;
+    background: rgba(0, 0, 0, 0.6);
+    backdrop-filter: blur(10px);
+    border: 1px solid rgba(255, 255, 255, 0.1);
+    border-radius: 30px;
+    padding: 8px 16px;
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    color: #fff;
+    font-size: 0.9rem;
+    z-index: 150;
+    transition: opacity 0.3s ease, transform 0.3s ease;
+    max-width: 300px;
+}
+
+.speech-feedback.hidden {
+    opacity: 0;
+    pointer-events: none;
+    transform: translateY(-10px);
+}
+
+.feedback-icon {
+    font-size: 1.2rem;
+    animation: pulse-mic 2s infinite;
+}
+
+@keyframes pulse-mic {
+    0% {
+        transform: scale(1);
+        opacity: 0.8;
+    }
+
+    50% {
+        transform: scale(1.1);
+        opacity: 1;
+        text-shadow: 0 0 10px rgba(255, 255, 255, 0.5);
+    }
+
+    100% {
+        transform: scale(1);
+        opacity: 0.8;
+    }
+}
+
+.feedback-text {
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+}
+
+/* ─── LOBBY SCREEN (V3.5 Polish) ───────────────────────────── */
+.lobby-overlay {
+    position: fixed;
+    top: 0;
+    left: 0;
+    width: 100vw;
+    height: 100vh;
+    background: rgba(0, 0, 0, 0.9);
+    backdrop-filter: blur(10px);
+    z-index: 200;
+    /* Above everything */
+    display: flex;
+    justify-content: center;
+    align-items: center;
+    color: #fff;
+}
+
+.lobby-overlay.hidden {
+    display: none;
+}
+
+.lobby-card {
+    background: #2d2d2d;
+    padding: var(--space-xl);
+    border-radius: var(--radius-lg);
+    box-shadow: 0 20px 60px rgba(0, 0, 0, 0.5);
+    text-align: center;
+    max-width: 500px;
+    width: 90%;
+    border: 1px solid rgba(255, 255, 255, 0.1);
+}
+
+.lobby-card h1 {
+    margin-bottom: var(--space-md);
+    font-size: 1.8rem;
+}
+
+.lobby-card p {
+    color: var(--text-muted);
+    margin-bottom: var(--space-lg);
+}
+
+.check-list {
+    background: rgba(0, 0, 0, 0.2);
+    border-radius: var(--radius-md);
+    padding: var(--space-md);
+    margin-bottom: var(--space-lg);
+    text-align: left;
+}
+
+.check-item {
+    display: flex;
+    align-items: center;
+    gap: var(--space-md);
+    padding: var(--space-sm) 0;
+    border-bottom: 1px solid rgba(255, 255, 255, 0.05);
+}
+
+.check-item:last-child {
+    border-bottom: none;
+}
+
+.check-item .status {
+    margin-left: auto;
+    font-size: 0.9rem;
+    color: #ffd700;
+    /* Waiting yellow */
+}
+
+.check-item.success .status {
+    color: var(--success);
+    font-weight: bold;
+}
+
+.check-item.success .status::before {
+    content: "✅ ";
+}
+
+.check-item.error .status {
+    color: var(--danger);
+}
+
+.lobby-preview {
+    width: 100%;
+    aspect-ratio: 16/9;
+    background: #000;
+    margin-bottom: var(--space-lg);
+    border-radius: 8px;
+    overflow: hidden;
+    position: relative;
+    display: none;
+    /* Hide for now unless we mirror stream here */
+}
+
+#startInterviewBtn:disabled {
+    opacity: 0.5;
+    cursor: not-allowed;
+    background: #555;
+}
+
+/* ─── SPOKEN QUESTION OVERLAY (ZOOM STYLE) ─────────────────── */
+.spoken-overlay {
+    position: absolute;
+    inset: 0;
+    pointer-events: none;
+    /* Let clicks pass through to video controls */
+    z-index: 50;
+    display: flex;
+    flex-direction: column;
+    justify-content: space-between;
+    padding: var(--space-xl);
+    padding-bottom: 100px;
+    /* Space for control bar */
+}
+
+.spoken-overlay.hidden {
+    display: none;
+}
+
+.question-caption-container {
+    width: 100%;
+    display: flex;
+    justify-content: center;
+    margin-top: var(--space-lg);
+    /* V3.6: User wants "pure Zoom" - hide text caption */
+    display: none !important;
+}
+
+.question-caption {
+    background: rgba(0, 0, 0, 0.6);
+    backdrop-filter: blur(12px);
+    padding: 16px 24px;
+    border-radius: var(--radius-lg);
+    font-size: 1.1rem;
+    font-weight: 500;
+    color: #fff;
+    text-align: center;
+    max-width: 800px;
+    line-height: 1.5;
+    border: 1px solid rgba(255, 255, 255, 0.1);
+    box-shadow: 0 4px 20px rgba(0, 0, 0, 0.3);
+    pointer-events: auto;
+    animation: slideDown 0.5s ease-out;
+}
+
+.spoken-controls {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    gap: var(--space-md);
+    pointer-events: auto;
+    margin-bottom: var(--space-md);
+}
+
+.spoken-timer {
+    background: rgba(0, 0, 0, 0.5);
+    color: rgba(255, 255, 255, 0.8);
+    padding: 8px 16px;
+    border-radius: 20px;
+    font-family: 'JetBrains Mono', monospace;
+    font-size: 0.9rem;
+    border: 1px solid rgba(255, 255, 255, 0.1);
+    /* V3.6: User wants "pure Zoom" - hide timer */
+    display: none !important;
+}
+
+.btn-finish-speaking {
+    background: var(--primary);
+    color: #fff;
+    border: none;
+    padding: 12px 24px;
+    border-radius: 30px;
+    font-weight: 600;
+    font-size: 1rem;
+    cursor: pointer;
+    box-shadow: 0 4px 15px rgba(108, 92, 231, 0.4);
+    transition: all 0.2s ease;
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    /* V3.7: User wants "pure Zoom" - hide button */
+    display: none !important;
+}
+
+.btn-finish-speaking:hover {
+    background: var(--primary-hover);
+    transform: translateY(-2px);
+    box-shadow: 0 6px 20px rgba(108, 92, 231, 0.6);
+}
+
+.btn-finish-speaking:disabled {
+    opacity: 0.7;
+    cursor: not-allowed;
+    transform: none;
+    background: #4a4a4a;
+    box-shadow: none;
+}
+
+@keyframes slideDown {
+    from {
+        transform: translateY(-20px);
+        opacity: 0;
+    }
+
+    to {
+        transform: translateY(0);
+        opacity: 1;
+    }
+}
+
+/* ─── GLOBAL DEBUG CONTROLS (RESTORED) ─────────────────────── */
+/* Moved to top definition */
