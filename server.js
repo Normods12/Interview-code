@@ -23,12 +23,12 @@ app.use(express.static(path.join(__dirname, 'public')));
 
 app.post('/api/interview/start', async (req, res) => {
     try {
-        const { role, candidateName } = req.body;
+        const { role, candidateName, difficulty } = req.body;
         if (!role || !candidateName) {
             return res.status(400).json({ error: 'role and candidateName are required' });
         }
 
-        const session = engine.createSession(role, candidateName);
+        const session = engine.createSession(role, candidateName, difficulty || 'medium');
         const firstQuestion = await engine.startInterview(session.id);
 
         res.json({ sessionId: session.id, ...firstQuestion });

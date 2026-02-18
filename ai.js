@@ -74,7 +74,48 @@ BEHAVIOR:
 
 // ─── SPOKEN QUESTION GENERATION ─────────────────────────────
 
-async function generateQuestion(role, questionNumber, difficulty = 'easy', previousTopics = []) {
+// ─── DIFFICULTY HELPERS ─────────────────────────────────────
+
+function getDifficultyPrompt(level) {
+    switch (level) {
+        case 'very_easy':
+            return {
+                style: 'Ask BASIC definitions or high-level concepts only. No trick questions. Perfect for students.',
+                grading: 'Grade LENIENTLY. Accept high-level understanding even if details are missing. 8/10 is easy to get.',
+                coding: 'Very simple logic (e.g., string manipulation, basic loops). Solvable in 5 mins.',
+            };
+        case 'easy':
+            return {
+                style: 'Ask standard junior-level questions. Focus on "What" and "How".',
+                grading: 'Grade FAIRLY. Expect correct terminology but forgive minor gaps.',
+                coding: 'Standard array/string problems. O(n^2) is acceptable.',
+            };
+        case 'hard':
+            return {
+                style: 'Ask Senior-level questions. Focus on "Why", trade-offs, and internals (JVM, Memory Model, Distributed Consistency).',
+                grading: 'Grade STRICTLY. Penalize vague answers. Expect specific edge cases.',
+                coding: 'Optimization required. O(n) or O(n log n) expected. Handle edge cases.',
+            };
+        case 'expert':
+            return {
+                style: 'Ask Staff/Principal level questions. System design limits, deep internals, concurrency hazards, and architectural trade-offs.',
+                grading: 'Grade RUTHLESSLY. 10/10 is almost impossible. Demolish vague answers. Demand precision.',
+                coding: 'Complex logic or system desing constraint. Space/Time complexity must be optimal.',
+            };
+        case 'medium':
+        default:
+            return {
+                style: 'Ask Mid-level questions. Balance between theory and practice.',
+                grading: 'Standard grading. 6/10 is average.',
+                coding: 'Standard algorithms. Clean code expected.',
+            };
+    }
+}
+
+// ─── SPOKEN QUESTION GENERATION ─────────────────────────────
+
+async function generateQuestion(role, questionNumber, difficulty = 'medium', previousTopics = []) {
+    const diffSettings = getDifficultyPrompt(difficulty);
     const avoidTopics = previousTopics.length > 0
         ? `\nDo NOT ask about these topics (already covered): ${previousTopics.join(', ')}`
         : '';
@@ -83,9 +124,11 @@ async function generateQuestion(role, questionNumber, difficulty = 'easy', previ
         { role: 'system', content: SYSTEM_PROMPT },
         {
             role: 'user',
-            content: `Ask interview question #${questionNumber} for a ${role} fresher.
-Difficulty: ${difficulty}.
-${questionNumber === 1 ? 'Warm-up — something like "Tell me about yourself" or "What tech are you most comfortable with?"' : 'Ask about ONE core technical concept for this role.'}${avoidTopics}
+            content: `Ask interview question #${questionNumber} for a ${role}.
+${questionNumber === 1 ? 'Warm-up — something like "Tell me about yourself".' : 'Ask about ONE core technical concept for this role.'}${avoidTopics}
+
+Difficulty Level: ${difficulty.toUpperCase()}.
+IMPORTANT INSTRUCTION: ${diffSettings.style}
 
 RULES:
 - ONE sentence only, max 12-15 words
@@ -123,6 +166,7 @@ Return ONLY the follow-up question, nothing else, no formatting.`
 // ─── MCQ GENERATION ─────────────────────────────────────────
 
 async function generateMCQ(role, difficulty = 'medium', previousTopics = []) {
+    const diffSettings = getDifficultyPrompt(difficulty);
     const avoidTopics = previousTopics.length > 0
         ? `\nDo NOT use these topics (already covered): ${previousTopics.join(', ')}`
         : '';
@@ -131,8 +175,9 @@ async function generateMCQ(role, difficulty = 'medium', previousTopics = []) {
         { role: 'system', content: SYSTEM_PROMPT },
         {
             role: 'user',
-            content: `Generate a multiple choice question for a ${role} fresher interview.
-Difficulty: ${difficulty}.${avoidTopics}
+            content: `Generate a multiple choice question for a ${role} interview.
+Difficulty: ${difficulty.toUpperCase()}.
+Instruction: ${diffSettings.style}${avoidTopics}
 
 Return ONLY a valid JSON object (no markdown, no code fences):
 {
@@ -185,18 +230,20 @@ ONE sentence only. Return ONLY the question.`
 
 // ─── CODING QUESTION GENERATION ─────────────────────────────
 
-async function generateCodingQuestion(role, difficulty = 'easy') {
+async function generateCodingQuestion(role, difficulty = 'medium') {
+    const diffSettings = getDifficultyPrompt(difficulty);
     const messages = [
         { role: 'system', content: SYSTEM_PROMPT },
         {
             role: 'user',
-            content: `Generate a simple coding question for a ${role} fresher.
-Difficulty: ${difficulty}.
+            content: `Generate a coding question for a ${role}.
+Difficulty: ${difficulty.toUpperCase()}.
+Instruction: ${diffSettings.coding}
 
 Rules:
-- Simple logic-based problem (NOT trick questions)
-- Solvable in 10-15 lines of code
-- JavaScript language
+- Logic-based problem
+- Solvable in 10-20 lines of code
+- JavaScript language default
 
 Return ONLY a valid JSON object (no markdown, no code fences):
 {
@@ -245,15 +292,18 @@ ONE sentence only. Return ONLY the question.`
 
 // ─── ANSWER EVALUATION ─────────────────────────────────────
 
-async function evaluateAnswer(question, answer) {
+async function evaluateAnswer(question, answer, difficulty = 'medium') {
+    const diffSettings = getDifficultyPrompt(difficulty);
     const messages = [
         { role: 'system', content: SYSTEM_PROMPT },
         {
             role: 'user',
             content: `Evaluate this interview answer.
-
 Question: "${question}"
 Answer: "${answer}"
+
+Difficulty: ${difficulty.toUpperCase()}.
+Instruction: ${diffSettings.grading}
 
 Return ONLY a valid JSON object (no markdown, no code fences):
 {
@@ -281,7 +331,8 @@ Return ONLY a valid JSON object (no markdown, no code fences):
     };
 }
 
-async function evaluateCodingAnswer(problem, code, explanation) {
+async function evaluateCodingAnswer(problem, code, explanation, difficulty = 'medium') {
+    const diffSettings = getDifficultyPrompt(difficulty);
     const messages = [
         { role: 'system', content: SYSTEM_PROMPT },
         {
@@ -291,6 +342,9 @@ async function evaluateCodingAnswer(problem, code, explanation) {
 Problem: "${problem}"
 Code: ${code}
 Explanation: "${explanation || 'none provided'}"
+
+Difficulty: ${difficulty.toUpperCase()}.
+Instruction: ${diffSettings.grading}
 
 Return ONLY a valid JSON object (no markdown, no code fences):
 {

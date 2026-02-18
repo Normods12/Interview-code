@@ -67,12 +67,13 @@ const V2_CONFIG = {
 const sessions = new Map();
 
 // ─── CREATE SESSION ─────────────────────────────────────────
-function createSession(role, candidateName) {
+function createSession(role, candidateName, difficulty = 'medium') {
     const id = uuidv4();
     const session = {
         id,
         role,
         candidateName,
+        difficulty,
         state: STATES.CREATED,
         currentSlotIndex: 0,
         currentFollowUpDepth: 0,
@@ -104,7 +105,7 @@ async function startInterview(sessionId) {
     session.currentSlotIndex = 0;
 
     const question = await ai.generateQuestion(
-        session.role, 1, 'easy', session.coveredTopics
+        session.role, 1, session.difficulty, session.coveredTopics
     );
 
     const slot = {
@@ -120,7 +121,7 @@ async function startInterview(sessionId) {
 
     // Save to DB
     database.stmts.insertQuestion.run(
-        sessionId, 1, 'spoken', 'easy', question, Date.now()
+        sessionId, 1, 'spoken', session.difficulty, question, Date.now()
     );
 
     return {
@@ -150,7 +151,7 @@ async function submitAnswer(sessionId, answer) {
         currentSlot.followUps[fuIndex].answerTimestamp = answerTimestamp;
 
         const evaluation = await ai.evaluateAnswer(
-            currentSlot.followUps[fuIndex].question, answer
+            currentSlot.followUps[fuIndex].question, answer, session.difficulty
         );
         currentSlot.followUps[fuIndex].evaluation = evaluation;
 
@@ -168,7 +169,7 @@ async function submitAnswer(sessionId, answer) {
         currentSlot.answer = answer;
         currentSlot.answerTimestamp = answerTimestamp;
 
-        const evaluation = await ai.evaluateAnswer(currentSlot.question, answer);
+        const evaluation = await ai.evaluateAnswer(currentSlot.question, answer, session.difficulty);
         currentSlot.evaluation = evaluation;
 
         // Extract topic
@@ -280,7 +281,7 @@ async function submitMCQJustification(sessionId, justification) {
     if (session.state !== STATES.MCQ_JUSTIFY) throw new Error('Not in MCQ justify state');
 
     const mcq = session.currentMCQ;
-    const evaluation = await ai.evaluateAnswer(mcq.justifyQuestion, justification);
+    const evaluation = await ai.evaluateAnswer(mcq.justifyQuestion, justification, session.difficulty);
 
     // Save to DB
     database.stmts.updateMcqJustification.run(
@@ -306,7 +307,7 @@ async function submitCode(sessionId, code, explanation, behaviorData) {
     const slot = session.slots[session.currentSlotIndex];
 
     // Evaluate
-    const evaluation = await ai.evaluateCodingAnswer(coding.problem, code, explanation);
+    const evaluation = await ai.evaluateCodingAnswer(coding.problem, code, explanation, session.difficulty);
 
     slot.code = code;
     slot.explanation = explanation;
@@ -364,7 +365,8 @@ async function advanceToNextSlot(session) {
 
     const slotIndex = session.currentSlotIndex;
     const slotType = V2_CONFIG.slotTypes[slotIndex];
-    const difficulty = V2_CONFIG.difficulties[slotIndex];
+    // Use session difficulty preference instead of hardcoded config
+    const difficulty = session.difficulty || 'medium';
 
     if (slotType === 'mcq') {
         return await generateMCQSlot(session, difficulty);

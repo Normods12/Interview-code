@@ -37,10 +37,12 @@ document.addEventListener('DOMContentLoaded', () => {
         startBtn.textContent = '⏳ Starting...';
 
         try {
+            const difficulty = document.getElementById('difficultySelect').value;
+
             const res = await fetch(`${API}/interview/start`, {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ role: selectedRole, candidateName }),
+                body: JSON.stringify({ role: selectedRole, candidateName, difficulty }),
             });
 
             if (!res.ok) throw new Error('Failed to start');
@@ -51,7 +53,7 @@ document.addEventListener('DOMContentLoaded', () => {
             sessionStorage.setItem('firstQuestion', JSON.stringify(data));
 
             // Navigate to interview
-            window.location.href = `/interview.html?session=${data.sessionId}&name=${encodeURIComponent(candidateName)}&role=${encodeURIComponent(selectedRole)}`;
+            window.location.href = `/interview.html?session=${data.sessionId}&name=${encodeURIComponent(candidateName)}&role=${encodeURIComponent(selectedRole)}&level=${difficulty}`;
         } catch (err) {
             console.error('Error starting interview:', err);
             alert('Could not start interview. Is the server running?');

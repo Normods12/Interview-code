@@ -83,14 +83,14 @@ function computeAnswerQuality(spokenSlots) {
     const scores = [];
     spokenSlots.forEach(slot => {
         // Main answer quality
-        if (slot.evaluation && slot.evaluation.quality) {
-            scores.push(slot.evaluation.quality);
+        if (slot.evaluation && slot.evaluation.answer_quality) {
+            scores.push(slot.evaluation.answer_quality);
         }
         // Follow-up evaluations
         if (slot.followUps) {
             slot.followUps.forEach(fu => {
-                if (fu.evaluation && fu.evaluation.quality) {
-                    scores.push(fu.evaluation.quality);
+                if (fu.evaluation && fu.evaluation.answer_quality) {
+                    scores.push(fu.evaluation.answer_quality);
                 }
             });
         }
@@ -108,12 +108,12 @@ function computeDepthStability(spokenSlots) {
 
     spokenSlots.forEach(slot => {
         if (!slot.followUps || slot.followUps.length === 0) return;
-        if (!slot.evaluation || !slot.evaluation.quality) return;
+        if (!slot.evaluation || !slot.evaluation.answer_quality) return;
 
-        const mainScore = slot.evaluation.quality;
+        const mainScore = slot.evaluation.answer_quality;
         const followUpScores = slot.followUps
-            .filter(fu => fu.evaluation && fu.evaluation.quality)
-            .map(fu => fu.evaluation.quality);
+            .filter(fu => fu.evaluation && fu.evaluation.answer_quality)
+            .map(fu => fu.evaluation.answer_quality);
 
         if (followUpScores.length === 0) return;
 
@@ -151,8 +151,8 @@ function computeMCQAccuracy(mcqSlots) {
         }
 
         // Justification quality (50% of MCQ score)
-        if (slot.justificationEval && slot.justificationEval.quality) {
-            slotScore += slot.justificationEval.quality * 5; // 0-10 → 0-50
+        if (slot.justificationEval && slot.justificationEval.answer_quality) {
+            slotScore += slot.justificationEval.answer_quality * 5; // 0-10 → 0-50
         } else if (slot.isCorrect) {
             slotScore += 25; // Partial credit if correct but no justification data
         }
@@ -168,9 +168,9 @@ function computeCodingScore(codingSlots) {
 
     let total = 0;
     codingSlots.forEach(slot => {
-        if (slot.codeEvaluation) {
-            const codeQuality = slot.codeEvaluation.codeQuality || 0;
-            const logic = slot.codeEvaluation.logic || 0;
+        if (slot.codingEval) {
+            const codeQuality = slot.codingEval.code_quality || 0;
+            const logic = slot.codingEval.logic_understanding === 'high' ? 10 : (slot.codingEval.logic_understanding === 'medium' ? 6 : 2); // Map string to number
             total += ((codeQuality + logic) / 2) * 10; // Average, convert to 0-100
         }
     });
@@ -240,10 +240,10 @@ function detectRiskFlags(session, spokenSlots, mcqSlots, codingSlots) {
     // 1. CONFIDENCE DECAY — strong first answer, weak follow-ups
     spokenSlots.forEach(slot => {
         if (!slot.evaluation || !slot.followUps) return;
-        const mainQ = slot.evaluation.quality || 0;
+        const mainQ = slot.evaluation.answer_quality || 0;
         const fuScores = slot.followUps
-            .filter(fu => fu.evaluation && fu.evaluation.quality)
-            .map(fu => fu.evaluation.quality);
+            .filter(fu => fu.evaluation && fu.evaluation.answer_quality)
+            .map(fu => fu.evaluation.answer_quality);
 
         if (mainQ >= 7 && fuScores.length > 0) {
             const avgFu = fuScores.reduce((a, b) => a + b, 0) / fuScores.length;
@@ -321,14 +321,14 @@ function detectRiskFlags(session, spokenSlots, mcqSlots, codingSlots) {
 
     // 5. MCQ-SPOKEN MISMATCH — MCQ correct but can't explain
     mcqSlots.forEach(slot => {
-        if (slot.isCorrect && slot.justificationEval && slot.justificationEval.quality) {
-            if (slot.justificationEval.quality <= 3) {
+        if (slot.isCorrect && slot.justificationEval && slot.justificationEval.answer_quality) {
+            if (slot.justificationEval.answer_quality <= 3) {
                 flags.push({
                     type: 'mcq_spoken_mismatch',
                     severity: 'warning',
                     icon: '🟡',
                     label: 'Surface Knowledge',
-                    detail: `Got MCQ correct but couldn't explain why (justification: ${slot.justificationEval.quality}/10)`,
+                    detail: `Got MCQ correct but couldn't explain why (justification: ${slot.justificationEval.answer_quality}/10)`,
                 });
             }
         }
